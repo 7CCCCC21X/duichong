@@ -1,0 +1,23 @@
+import pino from "pino";
+import { PredictPublic } from "../src/market/predictData.js";
+import { PolymarketPublic } from "../src/market/polymarketData.js";
+import { verifyPair } from "../src/pairing/verify.js";
+
+const log = pino({ level: "warn" });
+const pf = new PredictPublic({ restUrl: process.env.PF_URL ?? "https://api-testnet.predict.fun", apiKey: process.env.PREDICT_API_KEY ?? null, timeoutMs: 15000 }, log);
+const pm = new PolymarketPublic({ gammaUrl: "https://gamma-api.polymarket.com", clobUrl: "https://clob.polymarket.com", timeoutMs: 15000 }, log);
+const pfId = Number(process.argv[2] ?? 1371457);
+const m = await pf.market(pfId);
+const cat = await pf.category(m.categorySlug);
+console.log("Predict:", m.id, m.question, m.marketType, "pmIds", m.polymarketConditionIds);
+const pmM = await pm.marketWithEvent(m.polymarketConditionIds[0]!);
+if (!pmM) throw new Error("no pm market");
+console.log("Polymarket:", pmM.question, pmM.sportsMarketType, pmM.outcomes, "teams", pmM.event?.teams.map((t) => `${t.name}/${t.abbreviation}/${t.providerId}/${t.id}`));
+console.log("Predict teams:", cat.teams.map((t) => `${t.name}/${t.abbreviation}/${t.providerTeamId}/${t.id}`), "provider", cat.provider, cat.providerEventId, "pm event", pmM.eventId);
+const { def, verification } = verifyPair({ pf: m, cat, pm: pmM, now: Date.parse("2026-08-13T00:00:00Z") });
+console.log("STATUS", verification.status);
+for (const c of verification.checks) console.log(` [${c.level}] ${c.label}: ${c.detail}`);
+for (const s of verification.scenarios) console.log(` 情形 ${s.label}: Predict腿 ${s.predictLeg} + Polymarket腿 ${s.polymarketLeg} = ${s.total} → ${s.verdict}${s.note ? `（${s.note}）` : ""}`);
+console.log("clauses pf", JSON.stringify({ ...verification.clauses.predict, normalizedHash: undefined }));
+console.log("clauses pm", JSON.stringify({ ...verification.clauses.polymarket, normalizedHash: undefined }));
+console.log("def tokens", def?.predict.tokens, def?.polymarket.tokens, def?.labels);
