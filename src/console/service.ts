@@ -7,6 +7,8 @@ import { isTerminalFill, type Outcome } from "../core/types.js";
 import { applyStrategyPatch, effectiveRisk, effectiveStrategy, PairConfigSchema, RiskPatchStrictSchema, StrategyPatchStrictSchema, type PairConfig } from "../config/schema.js";
 import { computePositions, netExposure } from "../engine/ledger.js";
 import { acceptPositionsAsBaseline, reconcilePair, type ReconcileReport } from "../engine/reconcile.js";
+import { computeCapital } from "../monitor/capital.js";
+import { scanCandidates, scanConfigured } from "../monitor/scan.js";
 import { computeHedgeStats, statsSummary } from "../monitor/stats.js";
 import { isTradeable, pairIdFor, type StoredPair, type VerifyResult } from "../pairing/service.js";
 import type { PairDefinition, Verification } from "../pairing/verify.js";
@@ -144,6 +146,8 @@ export class ConsoleService {
   private discovering: Promise<Record<string, unknown>> | null = null;
   private discoverCache: { at: number; data: Record<string, unknown> } | null = null;
   private statsCache = new Map<string, { at: number; data: Record<string, unknown> }>();
+  private scanCache: { at: number; data: Awaited<ReturnType<typeof scanCandidates>> } | null = null;
+  private scanning: Promise<void> | null = null;
 
   constructor(private readonly ctx: AppContext) {}
 
@@ -281,6 +285,43 @@ export class ConsoleService {
     const data = { window: hours ? `最近 ${hours} 小时` : "全部", pairs: Object.fromEntries(ids.map((id) => [id, statsSummary(computeHedgeStats(this.ctx.repo, id, since))])) };
     this.statsCache.set(key, { at: now, data });
     return data;
+  }
+
+  /** 资金利用率：各平台余额、挂单占用、补单预留、在途、持仓，各配对占用与收益，限额使用，数量受限原因。 */
+  capital(): Record<string, unknown> {
+    return computeCapital(this.ctx) as unknown as Record<string, unknown>;
+  }
+
+  /** 机会：已配置配对按实时盘口评估（不访问网络）；候选市场为最近一次扫描的结果。 */
+  opportunities(): Record<string, unknown> {
+    return {
+      at: bjTime(this.ctx.clock.now()),
+      configured: scanConfigured(this.ctx),
+      candidates: this.scanCache?.data ?? null,
+      assumptions: "按当前订单簿、auto 价格模式（买一加价，不超过盈利上限）与当前参数评估；资金锁定时间 = 距开赛 + 比赛时长（BO1 约 1 小时、BO3 约 3 小时、BO5 约 5 小时）+ 结算 2 小时，按现在成交估算；USDT 与 pUSD 按 1:1。",
+    };
+  }
+
+  /** 扫描候选市场（访问两边公开接口，几十秒）：同一时间只跑一次，60 秒内复用结果。 */
+  async scan(): Promise<Record<string, unknown>> {
+    const now = this.ctx.clock.now();
+    if (!this.scanCache || now - this.scanCache.at > 60_000) {
+      if (!this.scanning) {
+        this.scanning = (async () => {
+          try {
+            this.scanCache = { at: this.ctx.clock.now(), data: await scanCandidates(this.ctx, { skipConfigured: true }) };
+          } finally {
+            this.scanning = null;
+          }
+        })();
+      }
+      try {
+        await this.scanning;
+      } catch (e) {
+        throw new ConsoleError(`扫描候选市场失败：${errMsg(e)}`, 502);
+      }
+    }
+    return this.opportunities();
   }
 
   // =====================================================================

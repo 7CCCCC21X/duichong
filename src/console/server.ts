@@ -181,6 +181,8 @@ export function createConsoleHandler(ctx: AppContext, svc: ConsoleService, auth:
     [/^\/api\/console\/global$/, () => svc.globalConfig()],
     [/^\/api\/console\/audit$/, (_r, _a, _b, _id, url) => svc.audit(Number(url.searchParams.get("limit") ?? 200) || 200)],
     [/^\/api\/console\/stats$/, (_r, _a, _b, _id, url) => svc.stats(url.searchParams.get("hours") ? Number(url.searchParams.get("hours")) || null : null)],
+    [/^\/api\/console\/capital$/, () => svc.capital()],
+    [/^\/api\/console\/opportunities$/, () => svc.opportunities()],
     [/^\/api\/console\/pairs\/([^/]+)\/config$/, (_r, _a, _b, id) => svc.pairConfig(id!)],
     [/^\/api\/console\/pairs\/([^/]+)\/review$/, (_r, _a, _b, id) => svc.review(id!)],
   ];
@@ -190,6 +192,7 @@ export function createConsoleHandler(ctx: AppContext, svc: ConsoleService, auth:
     [/^\/api\/console\/global$/, (_r, a, b) => svc.updateGlobal(a, b)],
     [/^\/api\/console\/reconcile$/, (_r, a, b) => svc.reconcile(a, b.pairId ? str(b.pairId) : null)],
     [/^\/api\/console\/discover$/, () => svc.discover()],
+    [/^\/api\/console\/opportunities\/scan$/, () => svc.scan()],
     [/^\/api\/console\/preview$/, (_r, _a, b) => svc.preview(b)],
     [/^\/api\/console\/pairs$/, (_r, a, b) => svc.addPair(a, b)],
     [/^\/api\/console\/pairs\/([^/]+)\/pause$/, (_r, a, b, id) => svc.pausePair(a, id!, str(b.reason))],

@@ -502,6 +502,119 @@ describe("控制台操作", () => {
 });
 
 // =====================================================================
+// 资金利用率与机会
+// =====================================================================
+
+describe("资金利用率与机会", () => {
+  it("资金：挂单占用、补单预留、持仓、利用率、每小时成交；数量受单场额度限制时给出提示", async () => {
+    const env = newEnv();
+    const { ctx, svc } = await boot(env);
+    await tick(ctx);
+    let cap = svc.capital() as unknown as import("../src/monitor/capital.js").CapitalReport;
+    const pf = cap.venues.find((v) => v.venue === "predict")!;
+    const pm = cap.venues.find((v) => v.venue === "polymarket")!;
+    // 挂 0.46 × 40：Predict 挂单占用 18.4；Polymarket 为全部成交预留补单资金 40 × 0.5125 = 20.5
+    expect(pf.makerReserved).toBeCloseTo(18.4, 6);
+    expect(pm.hedgeReserved).toBeCloseTo(20.5, 6);
+    expect(pf.balance).toBe(1000);
+    expect(pf.idle).toBeCloseTo(1000 - 18.4, 6);
+    expect(pf.utilization).toBeCloseTo(18.4 / 1000, 6);
+    expect(pm.utilization).toBe(0);
+    expect(pm.utilizationInclReserve).toBeCloseTo(20.5 / 1000, 6);
+
+    // 成交 10 份并补单，挂一个小时
+    (ctx.venues.predict as SimVenue).fillMaker(tokensOf(101, COND1).pf.A, fx(10));
+    await settle(ctx);
+    await tick(ctx, 2);
+    env.clock.advance(3600_000);
+    setMarket(ctx, 101, COND1);
+    await tick(ctx);
+    cap = svc.capital() as unknown as import("../src/monitor/capital.js").CapitalReport;
+    const p = cap.pairs.find((x) => x.id === "p1")!;
+    expect(p.positions.predict).toBeCloseTo(4.6, 6);
+    expect(p.positions.polymarket).toBeCloseTo(5.125, 6);
+    expect(p.hedgedShares).toBeCloseTo(10, 6);
+    expect(p.lockedPnl).toBeCloseTo(0.275, 6);
+    expect(p.returnPct).toBeCloseTo(0.275 / 9.725, 6);
+    expect(p.phase).toBe("未开赛");
+    expect(p.quotedHours).toBeGreaterThanOrEqual(1);
+    expect(p.filledPerHour).toBeGreaterThan(5);
+    expect(cap.venues.find((v) => v.venue === "predict")!.positionsOpen).toBeCloseTo(4.6, 6);
+    expect(cap.total.positionsOpen).toBeCloseTo(9.725, 6);
+
+    // 单场资金上限压到 20：挂单数量受限于单场资金上限
+    await svc.updatePairParams(ACTOR, "p1", { set: { risk: { maxMatchUsd: 20 } } });
+    await tick(ctx, 2);
+    cap = svc.capital() as unknown as import("../src/monitor/capital.js").CapitalReport;
+    expect(cap.pairs.find((x) => x.id === "p1")!.sizeLimit).toBe("单场资金上限");
+    expect(cap.bindings).toEqual([{ reason: "单场资金上限", pairs: ["p1"] }]);
+    expect(cap.hints.join("")).toMatch(/风控额度是瓶颈/);
+    expect(cap.pairs.find((x) => x.id === "p1")!.matchUsage).toBeGreaterThan(0.5);
+  });
+
+  it("比赛预计已结束的持仓单列，不计入利用率", async () => {
+    const env = newEnv();
+    const { ctx, svc } = await boot(env);
+    await tick(ctx);
+    (ctx.venues.predict as SimVenue).fillMaker(tokensOf(101, COND1).pf.A, fx(10));
+    await settle(ctx);
+    await tick(ctx, 2);
+    env.clock.advance(12 * 3600_000); // 开赛（6 小时后）+ BO3 3 小时 + 2 小时之后
+    const cap = svc.capital() as unknown as import("../src/monitor/capital.js").CapitalReport;
+    expect(cap.pairs.find((x) => x.id === "p1")!.phase).toBe("已结束（估计）");
+    expect(cap.total.positionsOpen).toBe(0);
+    expect(cap.total.positionsFinished).toBeCloseTo(9.725, 6);
+    expect(cap.hints.join("")).toMatch(/不自动赎回/);
+    // 结束超过 3 天：视为历史，不再计入（配置中的配对仍列出）
+    env.clock.advance(4 * 24 * 3600_000);
+    const later = svc.capital() as unknown as import("../src/monitor/capital.js").CapitalReport;
+    expect(later.total.positionsFinished).toBe(0);
+    expect(later.pairs.map((x) => x.id)).toEqual(["p1"]);
+  });
+
+  it("机会：已配置配对按实时盘口评估（扣除自己的挂单）；扫描候选市场用 REST 盘口", async () => {
+    const env = newEnv();
+    const { ctx, svc } = await boot(env);
+    await tick(ctx);
+    const opp = svc.opportunities() as { configured: import("../src/monitor/scan.js").OpportunityRow[]; candidates: unknown };
+    expect(opp.candidates).toBeNull();
+    const row = opp.configured.find((r) => r.key === "p1")!;
+    expect(row.best).toMatchObject({ makerVenue: "predict", makerOutcome: "A", queue: "ahead" });
+    expect(row.best!.bestBid).toBeCloseTo(0.45, 6); // 自己 0.46 的挂单已扣除
+    expect(row.current).toEqual({ venue: "predict", outcome: "A" });
+    expect(row.bookAgeSec).toBe(0);
+
+    // 候选扫描：伪造发现结果与 REST 盘口（不访问网络）
+    const now = env.clock.now();
+    const full = (pfId: number, cond: string, status: Verification["status"]) => {
+      const r = fakeVerify(pfId, cond, status, now);
+      return {
+        ...r,
+        pf: { id: pfId, title: "", question: `#${pfId}`, description: "", categorySlug: `cat-${pfId}`, status: "REGISTERED", tradingStatus: "OPEN", isNegRisk: false, isYieldBearing: false, feeRateBps: 200, feeExponent: 1, decimalPrecision: 2, speedBump: null, marketType: "SPORTS_MONEYLINE", marketVariant: "ESPORTS_CS2", polymarketConditionIds: [cond], conditionId: "0x00", outcomes: [], line: null, gameNumber: null, raw: {} },
+        cat: { startsAt: now + 6 * 3600_000 },
+        pm: { marketId: "m", conditionId: cond, slug: "", question: "TeamA vs TeamB (BO3)", description: "", outcomes: ["TeamA", "TeamB"], assetIds: [], version: "v1", sportsMarketType: "moneyline", groupItemTitle: null, line: null, gameStartTime: now + 6 * 3600_000, eventStartTime: null, endDate: null, negRisk: false, acceptingOrders: true, active: true, closed: false, archived: false, orderMinSize: 5, tickSize: 0.01, secondsDelay: 0, feesEnabled: true, feeSchedule: { rate: 0.05, exponent: 1, takerOnly: true, rebateRate: 0 }, resolutionSource: null, umaResolutionStatus: null, fallbackResolutionType: null, clearBookOnStart: true, updatedAt: null, eventId: null, event: null, raw: { volume24hrClob: 12345.6, liquidityClob: 2222 } },
+      } as unknown as VerifyResult;
+    };
+    ctx.pairing.discover = async () => ({ results: [full(101, COND1, "APPROVED"), full(102, COND2, "PENDING_REVIEW"), full(103, COND3, "REJECTED")], skipped: [] });
+    const yes: Book = { bids: [lv("0.45", 100)], asks: [lv("0.50", 100)], exchangeTs: now, receivedAt: now, source: "rest" };
+    Object.assign(ctx.pfPublic, { orderbooks: async (ids: number[]) => new Map(ids.map((i) => [i, yes])) });
+    const t2 = tokensOf(102, COND2).pm;
+    Object.assign(ctx.pmPublic, {
+      clobMarket: async () => null,
+      book: async (t: string) => (t === t2.A ? { bids: [lv("0.50", 500)], asks: [lv("0.51", 500)], exchangeTs: now, receivedAt: now, source: "rest" } : { bids: [lv("0.49", 500)], asks: [lv("0.50", 500)], exchangeTs: now, receivedAt: now, source: "rest" }),
+    });
+    const scanned = (await svc.scan()) as { candidates: { rows: import("../src/monitor/scan.js").OpportunityRow[]; rejected: number } };
+    const rows = scanned.candidates.rows;
+    expect(rows.map((r) => r.predictMarketId)).toEqual([102]); // 101 已配置（跳过），103 未通过核对
+    expect(scanned.candidates.rejected).toBe(1);
+    expect(rows[0]!.best).toMatchObject({ makerVenue: "predict", makerOutcome: "A", queue: "ahead" });
+    expect(rows[0]!.best!.profitPerShare).toBeCloseTo(0.0275, 6);
+    expect(rows[0]!.pmVolume24h).toBe(12345.6);
+    expect(rows[0]!.verifyStatus).toBe("PENDING_REVIEW");
+  });
+});
+
+// =====================================================================
 // HTTP：鉴权与防护
 // =====================================================================
 
@@ -654,5 +767,18 @@ describe("控制台 HTTP", () => {
     const audit = (await call(port, "GET", "/api/console/audit")).json() as unknown as { action: string; ok: boolean }[];
     expect(audit.map((a) => a.action).slice(0, 3)).toEqual(["pair.params", "pair.approve", "pair.add"]);
     expect(audit.every((a) => a.ok)).toBe(true);
+  });
+
+  it("资金与机会接口：只读可看；扫描候选市场需要控制口令", async () => {
+    const { port } = await serve(newEnv(), { statusToken: "status-token-abc" });
+    const r = { "x-console-token": "status-token-abc" };
+    const cap = await call(port, "GET", "/api/console/capital", { headers: r });
+    expect(cap.status).toBe(200);
+    expect((cap.json().venues as unknown[]).length).toBe(2);
+    const opp = await call(port, "GET", "/api/console/opportunities", { headers: r });
+    expect(opp.status).toBe(200);
+    expect((opp.json().configured as unknown[]).length).toBe(1);
+    expect((await post(port, "/api/console/opportunities/scan", {}, r)).status).toBe(401);
+    expect((await call(port, "GET", "/api/console/capital")).status).toBe(401);
   });
 });

@@ -83,6 +83,10 @@ export class RiskManager {
     return this.commitments.get(pairId) ?? emptyCommitment();
   }
 
+  listCommitments(): [string, PairCommitment][] {
+    return [...this.commitments.entries()];
+  }
+
   removePair(pairId: string): void {
     this.commitments.delete(pairId);
   }

@@ -10,6 +10,8 @@ import { createContext, loadPairs, refreshBalances, runBot } from "./app.js";
 import { acceptPositionsAsBaseline } from "./engine/reconcile.js";
 import { startConsoleServer } from "./console/server.js";
 import { computeHedgeStats, statsSummary } from "./monitor/stats.js";
+import { scanCandidates, type OpportunityRow } from "./monitor/scan.js";
+import type { CapitalReport } from "./monitor/capital.js";
 import { polymarketGeoblock } from "./market/geoblock.js";
 import { Db } from "./db/db.js";
 import { Repo } from "./db/repo.js";
@@ -46,6 +48,9 @@ const HELP = `用法: node dist/cli.js <命令> [参数]
   pairs show <pairId>                   查看配对详情（含两边规则原文）
   pairs approve <pairId> --note "原因"  人工批准“待审核”配对（规则版本变化后需重新批准；也可在网页控制台审批）
   status [--url http://127.0.0.1:8787]  查看运行中机器人的状态（网页控制台同一地址，见 README）
+  capital [--url http://127.0.0.1:8787]
+                                        资金利用率（读取运行中机器人的数据）：余额、挂单占用、补单预留、持仓、限额使用、各配对收益
+  scan [--json] [--all]                 哪些市场值得挂：遍历 Predict 电竞整场胜负盘，核对并按两边当前订单簿评估四个挂单方向
   stats [--db live|sim] [--hours 24] [--pair id] [--json] [--samples]
                                         补单统计：第一腿成交到第二腿成交的耗时 P50/P95、分段耗时、补单失败率、滑点
   books <predictMarketId> <polymarketConditionId>
@@ -71,6 +76,57 @@ function printVerify(r: VerifyResult): void {
   for (const s of v.scenarios) console.log(`    ${s.verdict === "consistent" ? "✓" : s.verdict === "mismatch" ? "✗" : "?"} ${s.label}：${s.predictLeg} + ${s.polymarketLeg} = ${s.total}${s.note ? `（${s.note}）` : ""}`);
 }
 
+
+const pctS = (x: number | null | undefined, d = 1) => (x === null || x === undefined ? "-" : `${(x * 100).toFixed(d)}%`);
+const m2 = (x: number | null | undefined) => (x === null || x === undefined ? "-" : x.toFixed(2));
+const p3 = (x: number | null | undefined) => (x === null || x === undefined ? "-" : x.toFixed(3));
+const hrs = (h: number | null | undefined) => (h === null || h === undefined ? "-" : h < 0 ? "已过" : h < 48 ? `${h.toFixed(1)} 小时` : `${(h / 24).toFixed(1)} 天`);
+const QUEUE_TXT: Record<string, string> = { ahead: "领先买一", join: "与买一同价", behind: "排在买一之后", empty: "簿上无买单" };
+const VENUE_TXT: Record<string, string> = { predict: "Predict", polymarket: "Polymarket" };
+
+function printCapital(d: CapitalReport): void {
+  console.log(`资金利用率（更新于 ${d.at}，北京时间；USDT 与 pUSD 按 1:1）`);
+  for (const v of d.venues) {
+    console.log(`  ${VENUE_TXT[v.venue]}：余额 ${m2(v.balance)}，挂单占用 ${m2(v.makerReserved)}，补单预留 ${m2(v.hedgeReserved)}，在途 ${m2(v.inflight)}，闲置 ${m2(v.idle)}，持仓（进行中）${m2(v.positionsOpen)}${v.positionsFinished ? `，已结束比赛待赎回 ${m2(v.positionsFinished)}` : ""} → 利用率 ${pctS(v.utilization)}（含补单预留 ${pctS(v.utilizationInclReserve)}）`);
+  }
+  const t = d.total;
+  console.log(`  合计：余额 ${m2(t.balance)}，工作中 ${m2(t.working)}，补单预留 ${m2(t.reserved)} → 利用率 ${pctS(t.utilization)}（含补单预留 ${pctS(t.utilizationInclReserve)}）`);
+  const L = d.limits;
+  console.log(`风控额度：全局资金 ${m2(L.globalCommitted)}/${L.maxGlobalUsd}（${pctS(L.globalUsage)}），全局未对冲 ${m2(L.globalUnhedged)}/${L.maxUnhedgedSharesGlobal} 份，当日亏损 ${m2(L.lossToday)}/${L.maxDailyLossUsd}`);
+  for (const b of d.bindings) console.log(`挂单数量受限于“${b.reason}”：${b.pairs.join("、")}`);
+  for (const h of d.hints) console.log(`提示：${h}`);
+  console.log("各配对：");
+  for (const p of d.pairs) {
+    console.log(`  ${p.id}${p.active ? "" : "（已删除）"}  ${p.labels ? `${p.labels.A} vs ${p.labels.B}` : "-"}  ${p.phase}  挂单占用 ${m2(p.makerReserved)}  补单预留 ${m2(p.hedgeReserved)}  持仓 Predict ${m2(p.positions.predict)} / Polymarket ${m2(p.positions.polymarket)}  已对冲 ${m2(p.hedgedShares)} 份  锁定盈亏 ${m2(p.lockedPnl)}（${pctS(p.returnPct, 2)}）  挂单 ${p.quotedHours.toFixed(1)} 小时  每小时成交 ${p.filledPerHour ?? "-"} 份${p.sizeLimit ? `  数量受限于 ${p.sizeLimit}` : ""}`);
+  }
+}
+
+function printScan(rows: OpportunityRow[], all: boolean, rejected: number, errors: string[]): void {
+  const key = (r: OpportunityRow) => (r.best ? (r.best.queue === "behind" ? 1 : 2) * 1e6 + (r.best.returnPerDay ?? r.best.returnPct ?? 0) : -1);
+  const sorted = [...rows].sort((a, b) => key(b) - key(a));
+  console.log(`\n可交易候选 ${rows.length} 个（未通过核对 ${rejected} 个不列出）。排序：能排到买一的优先，再按每天资金收益率。时间为北京时间。`);
+  for (const r of sorted) {
+    const b = r.best;
+    if (!b && !all) continue;
+    const head = `${r.labels.A} vs ${r.labels.B}  开赛 ${r.startTime ?? "-"}（${hrs(r.hoursToStart)}后，停止挂单还剩 ${hrs(r.hoursToStop)}）  ${r.verifyStatus}${r.configuredAs ? `  已配置为 ${r.configuredAs}` : ""}`;
+    console.log(`\n${head}`);
+    console.log(`  Predict #${r.predictMarketId}  Polymarket ${r.polymarketConditionId}  PM 24h 成交 ${r.pmVolume24h === null ? "-" : r.pmVolume24h.toFixed(0)}`);
+    if (!b) {
+      console.log(`  四个方向都不可挂：${r.directions.map((d) => `${VENUE_TXT[d.makerVenue]} 买 ${d.makerTeam}：${d.reason}`).join("；")}`);
+      continue;
+    }
+    for (const d of r.directions) {
+      const mark = d === b || (d.makerVenue === b.makerVenue && d.makerOutcome === b.makerOutcome) ? "★" : " ";
+      if (!d.ok) {
+        console.log(`  ${mark} ${VENUE_TXT[d.makerVenue]} 挂买 ${d.makerTeam}：不可挂（${d.reason}）`);
+        continue;
+      }
+      console.log(`  ${mark} ${VENUE_TXT[d.makerVenue]} 挂买 ${d.makerTeam}：挂 ${p3(d.price)}（上限 ${p3(d.makerPriceMax)}，买一 ${p3(d.bestBid)}，${QUEUE_TXT[d.queue ?? ""] ?? "-"}）× ${m2(d.size)} 份，每份利润 ${p3(d.profitPerShare)}，每对资金 ${p3(d.capitalPerShare)}，收益率 ${pctS(d.returnPct, 2)}，每天 ${pctS(d.returnPerDay, 2)}`);
+    }
+  }
+  if (errors.length) console.log(`\n部分数据没拿到：${errors.join("；")}`);
+}
+
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   const [cmd, sub, ...rest] = args._;
@@ -89,6 +145,15 @@ async function main(): Promise<void> {
     const tok = cfg.secrets.statusToken ? `?token=${encodeURIComponent(cfg.secrets.statusToken)}` : "";
     const res = await fetch(`${url}/api/status${tok}`);
     console.log(JSON.stringify(await res.json(), null, 2));
+    return;
+  }
+
+  if (cmd === "capital") {
+    const url = String(args.flags.url ?? `http://${cfg.app.statusServer.host}:${cfg.app.statusServer.port}`);
+    const tok = cfg.secrets.statusToken ? `?token=${encodeURIComponent(cfg.secrets.statusToken)}` : "";
+    const res = await fetch(`${url}/api/console/capital${tok}`);
+    if (!res.ok) throw new Error(`读取失败：HTTP ${res.status}（机器人需要在运行，且 statusServer 已启用）`);
+    printCapital((await res.json()) as CapitalReport);
     return;
   }
 
@@ -205,6 +270,15 @@ async function main(): Promise<void> {
         ctx.repo.insertAudit({ ts: Date.now(), actor: process.env.USER ?? "cli", source: "cli", ip: null, action: "pair.approve", target: id, params: { note }, ok: true, result: { status: p.status } });
         console.log(`已批准 ${p.id}（规则版本 ${p.approvedRulesHash?.slice(0, 12)}）；规则变化后需重新批准`);
       } else throw new Error(HELP);
+      ctx.db.close();
+      process.exit(0);
+      return;
+    }
+    case "scan": {
+      console.log("正在遍历 Predict 电竞整场胜负盘、核对并拉取两边订单簿……");
+      const r = await scanCandidates(ctx, { skipConfigured: false });
+      if (args.flags.json) console.log(JSON.stringify(r, null, 2));
+      else printScan(r.rows, !!args.flags.all, r.rejected, r.errors);
       ctx.db.close();
       process.exit(0);
       return;

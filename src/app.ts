@@ -24,6 +24,7 @@ import { PredictLiveVenue } from "./venues/predict/live.js";
 import { SimVenue } from "./venues/sim/simVenue.js";
 import type { TradingVenue } from "./venues/types.js";
 import { polymarketGeoblock } from "./market/geoblock.js";
+import { pmActivity } from "./monitor/opportunity.js";
 
 export interface AppContext {
   /** cfg.app 为实际生效的全局配置（config.yaml + 控制台全局覆盖） */
@@ -62,6 +63,8 @@ export interface AppContext {
   tokenToMarket: Map<string, string>;
   /** token → 使用它的配对（行情更新时触发评估） */
   tokenOwners: Map<string, Set<string>>;
+  /** Polymarket 市场活跃度（conditionId → 24 小时成交额、挂单深度），随市场数据每分钟刷新 */
+  pmActivity: Map<string, { volume24h: number | null; liquidity: number | null; updatedAt: number }>;
   /** 主循环已启动：之后新增的配对需要自行订阅成交推送并对账 */
   running: boolean;
 }
@@ -209,6 +212,7 @@ export function createContext(fileCfg: LoadedConfig, log: Logger, opts: { clock?
     stored: new Map(),
     tokenToMarket,
     tokenOwners: new Map(),
+    pmActivity: new Map(),
     running: false,
   };
   ctxRef.ctx = ctx;
@@ -330,6 +334,7 @@ export async function refreshMeta(ctx: AppContext, def: PairDefinition): Promise
     if (pm) {
       const clob = await ctx.pmPublic.clobMarket(def.polymarket.conditionId);
       ctx.books.setMeta(pmMetaFrom(pm, clob, ctx.cfg.app.polymarket.minOrderMode, now));
+      ctx.pmActivity.set(def.polymarket.conditionId, { ...pmActivity(pm.raw), updatedAt: now });
     }
   } catch (e) {
     ctx.log.warn({ err: errMsg(e), market: def.polymarket.conditionId }, "刷新 Polymarket 市场数据失败");

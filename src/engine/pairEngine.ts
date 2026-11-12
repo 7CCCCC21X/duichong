@@ -1270,6 +1270,11 @@ export class PairEngine {
   get inEmergency(): boolean {
     return this.emergency !== null;
   }
+
+  /** 最近一次报价结果（资金页用来显示挂单数量受什么限制）。 */
+  get latestQuote(): Quote | null {
+    return this.lastQuote;
+  }
 }
 
 interface Candidate {

@@ -30,9 +30,12 @@ const log = pino({ level: process.env.LOG_LEVEL ?? "error" });
 
 const RULES = `This market refers to the Counter-Strike 2 match between the two teams (BO3). If the match is cancelled or ends in a draw, this market will resolve 50-50. If the match is postponed beyond 7 days, it resolves 50-50. If a team forfeits before the match starts, 50-50; after the match starts, the opponent is the winner. Resolution source: hltv.org.（合成规则，仅演示）`;
 
+// 合成盘口参数：pfBid/pfAsk 为 Predict A（Yes）买一/卖一，pmBid/pmAsk 为 Polymarket A 买一/卖一，vol 为 Polymarket 24 小时成交额
 const MARKETS = [
-  { pfId: 9001, cond: "0x" + "a1".repeat(32), labels: { A: "Team Alpha", B: "Team Bravo" }, status: "APPROVED" as const, startInH: 5 },
-  { pfId: 9002, cond: "0x" + "b2".repeat(32), labels: { A: "Team Charlie", B: "Team Delta" }, status: "PENDING_REVIEW" as const, startInH: 9 },
+  { pfId: 9001, cond: "0x" + "a1".repeat(32), labels: { A: "Team Alpha", B: "Team Bravo" }, status: "APPROVED" as const, startInH: 5, bo: 3, pfBid: 0.44, pfAsk: 0.49, pmBid: 0.5, pmAsk: 0.51, vol: 48_200 },
+  { pfId: 9002, cond: "0x" + "b2".repeat(32), labels: { A: "Team Charlie", B: "Team Delta" }, status: "PENDING_REVIEW" as const, startInH: 9, bo: 3, pfBid: 0.3, pfAsk: 0.36, pmBid: 0.36, pmAsk: 0.37, vol: 15_900 },
+  { pfId: 9003, cond: "0x" + "c3".repeat(32), labels: { A: "Team Echo", B: "Team Foxtrot" }, status: "APPROVED" as const, startInH: 52, bo: 3, pfBid: 0.55, pfAsk: 0.6, pmBid: 0.6, pmAsk: 0.61, vol: 3_100 },
+  { pfId: 9004, cond: "0x" + "d4".repeat(32), labels: { A: "Team Golf", B: "Team Hotel" }, status: "APPROVED" as const, startInH: 3, bo: 1, pfBid: 0.52, pfAsk: 0.55, pmBid: 0.47, pmAsk: 0.48, vol: 92_700 },
 ];
 const tok = (pfId: number) => ({ pf: { A: `demo-pf-${pfId}-A`, B: `demo-pf-${pfId}-B` }, pm: { A: `demo-pm-${pfId}-A`, B: `demo-pm-${pfId}-B` } });
 
@@ -44,7 +47,7 @@ function fakeVerify(m: (typeof MARKETS)[number]): VerifyResult {
     labels: m.labels,
     game: "cs2",
     marketType: "moneyline",
-    bestOf: 3,
+    bestOf: m.bo,
     startTime: Date.now() + m.startInH * 3600_000,
     rules: { predict: RULES, polymarket: m.status === "APPROVED" ? RULES : RULES.replace("7 days", "14 days"), predictHash: "p", polymarketHash: "q" },
     versionTag: "demo",
@@ -70,7 +73,18 @@ function fakeVerify(m: (typeof MARKETS)[number]): VerifyResult {
     clauses: { predict: clause(7), polymarket: clause(warn ? 14 : 7) },
     rulesHash: `demo-${m.pfId}`,
   } as unknown as Verification;
-  return { pairId: pairIdFor(m.pfId, m.cond), pf: { id: m.pfId, question: `${m.labels.A} vs ${m.labels.B}` }, cat: {}, pm: { conditionId: m.cond, question: `CS2: ${m.labels.A} vs ${m.labels.B} (BO3)` }, def, verification } as unknown as VerifyResult;
+  const start = Date.now() + m.startInH * 3600_000;
+  const pf = { id: m.pfId, title: "", question: `${m.labels.A} vs ${m.labels.B}`, description: RULES, categorySlug: `demo-cs2-${m.pfId}`, status: "REGISTERED", tradingStatus: "OPEN", isNegRisk: false, isYieldBearing: false, feeRateBps: 200, feeExponent: 1, decimalPrecision: 2, speedBump: null, marketType: "SPORTS_MONEYLINE", marketVariant: "ESPORTS_CS2", polymarketConditionIds: [m.cond], conditionId: "0x" + "cd".repeat(32), outcomes: [], line: null, gameNumber: null, raw: {} };
+  const pm = { marketId: `demo-${m.pfId}`, conditionId: m.cond, slug: "", question: `Counter-Strike: ${m.labels.A} vs ${m.labels.B} (BO${m.bo})`, description: RULES, outcomes: [m.labels.A, m.labels.B], assetIds: [t.pm.A, t.pm.B], version: "v1", sportsMarketType: "moneyline", groupItemTitle: null, line: null, gameStartTime: start, eventStartTime: null, endDate: null, negRisk: false, acceptingOrders: true, active: true, closed: false, archived: false, orderMinSize: 5, tickSize: 0.01, secondsDelay: 0, feesEnabled: true, feeSchedule: { rate: 0.05, exponent: 1, takerOnly: true, rebateRate: 0 }, resolutionSource: null, umaResolutionStatus: null, fallbackResolutionType: null, clearBookOnStart: true, updatedAt: null, eventId: null, event: null, raw: { volume24hrClob: m.vol, liquidityClob: m.vol / 3 } };
+  return { pairId: pairIdFor(m.pfId, m.cond), pf, cat: { startsAt: start }, pm, def, verification } as unknown as VerifyResult;
+}
+
+/** 某个合成市场当前的订单簿（Predict 只给 Yes 簿，与真实接口一致）。 */
+function marketBooks(m: (typeof MARKETS)[number], now: number): { yes: Book; pmA: Book } {
+  const wiggle = (Math.floor(now / 20_000) % 2) * 0.01;
+  const yes: Book = { bids: [lv((m.pfBid + wiggle).toFixed(2), 120), lv((m.pfBid - 0.01).toFixed(2), 300)], asks: [lv((m.pfAsk + wiggle).toFixed(2), 150), lv((m.pfAsk + 0.02).toFixed(2), 400)], exchangeTs: now, receivedAt: now, source: "sim" };
+  const pmA: Book = { bids: [lv(m.pmBid.toFixed(2), 800), lv((m.pmBid - 0.01).toFixed(2), 1500)], asks: [lv(m.pmAsk.toFixed(2), 600), lv((m.pmAsk + 0.01).toFixed(2), 1200)], exchangeTs: now, receivedAt: now, source: "sim" };
+  return { yes, pmA };
 }
 
 function books(ctx: AppContext): void {
@@ -79,11 +93,9 @@ function books(ctx: AppContext): void {
     const t = tok(m.pfId);
     ctx.books.setMeta(pfMeta({ marketKey: String(m.pfId), startTime: now + m.startInH * 3600_000 }));
     ctx.books.setMeta(pmMeta({ marketKey: m.cond, startTime: now + m.startInH * 3600_000 }));
-    const wiggle = (Math.floor(now / 20_000) % 2) * 0.01;
-    const yes: Book = { bids: [lv((0.44 + wiggle).toFixed(2), 120), lv("0.43", 300)], asks: [lv((0.49 + wiggle).toFixed(2), 150), lv("0.51", 400)], exchangeTs: now, receivedAt: now, source: "sim" };
+    const { yes, pmA } = marketBooks(m, now);
     ctx.books.setBook("predict", t.pf.A, yes);
     ctx.books.setBook("predict", t.pf.B, complementBook(yes, fx("0.01")));
-    const pmA: Book = { bids: [lv("0.50", 800), lv("0.49", 1500)], asks: [lv("0.51", 600), lv("0.52", 1200)], exchangeTs: now, receivedAt: now, source: "sim" };
     ctx.books.setBook("polymarket", t.pm.A, pmA);
     ctx.books.setBook("polymarket", t.pm.B, complementBook(pmA, fx("0.01")));
   }
@@ -124,13 +136,28 @@ ctx.pairing.discover = async () => ({ results: MARKETS.map(fakeVerify), skipped:
 const offline = async () => {
   throw new Error("演示环境不访问网络");
 };
-Object.assign(ctx.pfPublic, { market: offline, category: offline });
-Object.assign(ctx.pmPublic, { marketsByConditionIds: offline, clobMarket: offline });
+// 候选市场扫描用的 REST 订单簿：返回同样的合成盘口
+Object.assign(ctx.pfPublic, {
+  market: offline,
+  category: offline,
+  orderbooks: async (ids: number[]) => new Map(ids.flatMap((id) => MARKETS.filter((m) => m.pfId === id).map((m) => [id, marketBooks(m, Date.now()).yes] as [number, Book]))),
+});
+Object.assign(ctx.pmPublic, {
+  marketsByConditionIds: offline,
+  clobMarket: async () => null,
+  book: async (token: string) => {
+    const m = MARKETS.find((x) => tok(x.pfId).pm.A === token || tok(x.pfId).pm.B === token);
+    if (!m) throw new Error("演示环境没有这个代币");
+    const { pmA } = marketBooks(m, Date.now());
+    return token === tok(m.pfId).pm.A ? pmA : complementBook(pmA, fx("0.01"));
+  },
+});
 Object.assign(ctx.pmFeed, { subscribe: () => {}, unsubscribe: () => {} });
 Object.defineProperty(ctx.pmFeed, "up", { get: () => true });
 Object.assign(ctx.pfFeed, { subscribe: () => {}, unsubscribe: () => {} });
 for (const v of ["predict", "polymarket"] as const) ctx.venues[v].onEvent((e) => ctx.router.handle(e));
 books(ctx);
+ctx.pmActivity.set(MARKETS[0]!.cond, { volume24h: MARKETS[0]!.vol, liquidity: MARKETS[0]!.vol / 3, updatedAt: Date.now() });
 await loadPairs(ctx);
 await refreshBalances(ctx);
 await reconcileAll(ctx);

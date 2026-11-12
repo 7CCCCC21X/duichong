@@ -47,6 +47,8 @@
   var TABS = [
     ["overview", "总览"],
     ["pairs", "配对"],
+    ["capital", "资金"],
+    ["scan", "机会"],
     ["review", "审核"],
     ["params", "全局参数"],
     ["stats", "补单统计"],
@@ -382,6 +384,9 @@
           renderBanner();
           renderTabs();
           if (LIVE_TABS[S.tab] || !$("view").dataset.tab || $("view").dataset.tab !== S.tab) renderView();
+          // 资金与机会页：数据单独加载，5 秒刷新一次
+          if (S.tab === "capital" && !capState.loading && Date.now() - capState.at > 5000) loadCapital();
+          if (S.tab === "scan" && !oppState.loading && Date.now() - oppState.at > 5000) loadOpp();
         });
       })
       .catch(function (e) {
@@ -460,6 +465,8 @@
       if (S.tab === "overview") content = viewOverview();
       else if (S.tab === "pairs") content = viewPairs();
       else if (S.tab === "review") content = viewReview();
+      else if (S.tab === "capital") content = viewCapital();
+      else if (S.tab === "scan") content = viewOpportunities();
       else if (S.tab === "params") content = viewGlobalParams();
       else if (S.tab === "stats") content = viewStats();
       else if (S.tab === "audit") content = viewAudit();
@@ -1240,7 +1247,7 @@
           else if (r.status === "PENDING_REVIEW") parts.push(h("div", { class: "msg warn" }, "待审核：可以添加，但在“审核”页人工批准前不会挂单。"));
           else parts.push(h("div", { class: "msg ok" }, "核对通过。"));
           if (r.canAdd) {
-            form = addForm(r);
+            form = addForm(r, prefill);
             parts.push(card("添加设置", form.node));
           }
           parts.push(details("preview", "核对详情（检查项、结算情形、规则原文）", h("div", null, reviewBody(r))));
@@ -1273,7 +1280,7 @@
     });
     if (prefill) runPreview();
   }
-  function addForm(r) {
+  function addForm(r, prefill) {
     var labels = r.def.labels;
     var id = h("input", { type: "text", value: r.suggestedId, maxlength: "64" });
     var dir = h(
@@ -1287,6 +1294,7 @@
         });
       }),
     );
+    if (prefill && prefill.maker) dir.value = prefill.maker.venue + ":" + prefill.maker.outcome;
     var size = h("input", { type: "number", step: "any", min: "0", placeholder: "留空沿用全局" });
     var mode = h("select", null, h("option", { value: "" }, "沿用全局"), h("option", { value: "auto" }, "买一加价，不超过盈利上限"), h("option", { value: "max" }, "盈利上限价"), h("option", { value: "fixed" }, "固定价"));
     var price = h("input", { type: "number", step: "any", min: "0", max: "1", placeholder: "固定价模式填写" });
@@ -1354,6 +1362,288 @@
       .catch(function (e) {
         box.replaceChildren(h("div", { class: "msg bad" }, e.message));
       });
+  }
+
+
+  // ------------------------------------------------------------------
+  // 资金利用率
+  // ------------------------------------------------------------------
+  function money(x) {
+    return x === null || x === undefined ? "-" : Number(x).toFixed(2);
+  }
+  function px(x) {
+    return x === null || x === undefined ? "-" : Number(x).toFixed(3);
+  }
+  function pctFmt(x, d) {
+    return x === null || x === undefined ? "-" : (x * 100).toFixed(d === undefined ? 1 : d) + "%";
+  }
+  function hoursFmt(hh) {
+    if (hh === null || hh === undefined) return "-";
+    if (hh < 0) return "已过";
+    if (hh < 1) return Math.round(hh * 60) + " 分钟";
+    if (hh < 48) return hh.toFixed(1) + " 小时";
+    return (hh / 24).toFixed(1) + " 天";
+  }
+  function usdK(x) {
+    if (x === null || x === undefined) return "-";
+    if (x >= 1e6) return (x / 1e6).toFixed(2) + "M";
+    if (x >= 1e3) return (x / 1e3).toFixed(1) + "K";
+    return x.toFixed(0);
+  }
+  /** 大号百分比 + 满宽进度条（例如资金利用率），sub 为下方小字 */
+  function utilBlock(x, label, sub) {
+    return h(
+      "div",
+      { class: "util" },
+      h("div", null, h("span", { class: "util-big" }, pctFmt(x)), " ", h("span", { class: "hint" }, label)),
+      x === null || x === undefined ? null : h("meter", { class: "util-meter", min: "0", max: "1", low: "0.3", high: "0.9", optimum: "0.7", value: String(Math.max(0, Math.min(1, x))) }),
+      sub ? h("div", { class: "hint" }, sub) : null,
+    );
+  }
+
+  var capState = { data: null, error: null, at: 0, loading: false };
+  function loadCapital() {
+    capState.loading = true;
+    capState.at = Date.now();
+    return api("GET", "/api/console/capital")
+      .then(function (d) {
+        capState.data = d;
+        capState.error = null;
+      })
+      .catch(function (e) {
+        capState.error = e.message;
+      })
+      .finally(function () {
+        capState.loading = false;
+        if (S.tab === "capital") renderView();
+      });
+  }
+  function viewCapital() {
+    if (!capState.loading && !capState.data && !capState.error) loadCapital();
+    var head = h("div", { class: "section-head" }, h("h2", null, "资金利用率"), btn("刷新", loadCapital), capState.data ? h("span", { class: "hint" }, "更新于 " + capState.data.at) : null);
+    var note = h(
+      "p",
+      { class: "hint" },
+      "每个平台的资金 = 现金余额 + 进行中比赛的持仓（按成本）。利用率 = (挂单占用 + 在途吃单 + 持仓) ÷ (余额 + 持仓)；补单预留是为挂单全部成交预留在对冲平台的钱，没有真正冻结，但机器人不会动用，所以另给出“含补单预留”的占用率。USDT 与 pUSD 按 1:1 合计。",
+    );
+    if (capState.error) return h("div", null, head, note, h("div", { class: "msg bad" }, capState.error));
+    if (!capState.data) return h("div", null, head, note, h("p", { class: "mut" }, "加载中…"));
+    var d = capState.data;
+    var venueCard = function (v) {
+      return card(
+        VENUE[v.venue] + (v.venue === "predict" ? "（USDT）" : "（pUSD）"),
+        h("div", null, utilBlock(v.utilization, "资金利用率", "含补单预留 " + pctFmt(v.utilizationInclReserve)), kv([
+          ["余额", money(v.balance) + (v.balanceAt ? "（" + v.balanceAt.slice(11) + "）" : "")],
+          ["挂单占用", money(v.makerReserved)],
+          ["补单预留", money(v.hedgeReserved)],
+          ["在途吃单", money(v.inflight)],
+          ["闲置", v.idle !== null && v.idle < 0 ? h("span", { class: "bad" }, money(v.idle)) : money(v.idle)],
+          ["持仓（进行中比赛，按成本）", money(v.positionsOpen)],
+          v.positionsFinished ? ["已结束比赛的持仓（待赎回）", h("span", { class: "warn" }, money(v.positionsFinished))] : null,
+        ])),
+      );
+    };
+    var t = d.total;
+    var L = d.limits;
+    var cards = h(
+      "div",
+      { class: "grid" },
+      d.venues.map(venueCard),
+      card("合计", h("div", null, utilBlock(t.utilization, "资金利用率", "含补单预留 " + pctFmt(t.utilizationInclReserve)), kv([["余额", money(t.balance)], ["工作中（挂单 + 在途 + 持仓）", money(t.working)], ["补单预留", money(t.reserved)], ["持仓（进行中）", money(t.positionsOpen)]]))),
+      card(
+        "风控额度使用",
+        h(
+          "div",
+          null,
+          utilBlock(L.globalUsage, "全局资金额度", money(L.globalCommitted) + " / " + L.maxGlobalUsd + "（持仓成本 + 挂单占用 + 补单预留 + 在途）"),
+          kv([
+            ["全局未对冲", money(L.globalUnhedged) + " / " + L.maxUnhedgedSharesGlobal + " 份"],
+            ["当日亏损", money(L.lossToday) + " / " + L.maxDailyLossUsd],
+          ]),
+        ),
+      ),
+    );
+    var hints = d.hints.length ? h("div", null, d.hints.map(function (x) { return h("div", { class: "msg warn" }, x); })) : null;
+    var bindings = d.bindings.length
+      ? h("div", null, h("h2", null, "挂单数量被什么限制"), card(null, table(d.bindings.map(function (b) { return { 限制因素: b.reason, 配对: b.pairs.join("、"), 数量: b.pairs.length }; }))))
+      : null;
+    var phaseCls = { 未开赛: "", "进行中（估计）": "warn", "已结束（估计）": "mut", 未知: "" };
+    var rows = d.pairs.map(function (p) {
+      return {
+        配对: p.id + (p.active ? "" : "（已删除）"),
+        比赛: p.labels ? p.labels.A + " vs " + p.labels.B : "-",
+        阶段: badge(p.phase, phaseCls[p.phase]),
+        挂单占用: money(p.makerReserved),
+        补单预留: money(p.hedgeReserved),
+        "持仓 Predict": money(p.positions.predict),
+        "持仓 Polymarket": money(p.positions.polymarket),
+        已对冲: money(p.hedgedShares),
+        锁定盈亏: money(p.lockedPnl),
+        锁定收益率: pctFmt(p.returnPct, 2),
+        单场额度: p.matchUsage === null ? "-" : pctFmt(p.matchUsage) + "（" + money(p.matchCommitted) + "/" + p.matchLimit + "）",
+        挂单时长: hoursFmt(p.quotedHours),
+        "每小时成交（份）": p.filledPerHour === null ? "-" : p.filledPerHour.toFixed(1),
+        每小时锁定利润: p.pnlPerHour === null ? "-" : p.pnlPerHour.toFixed(3),
+        数量受限于: p.sizeLimit || "-",
+      };
+    });
+    return h(
+      "div",
+      null,
+      head,
+      note,
+      cards,
+      hints,
+      bindings,
+      h("h2", null, "各配对"),
+      h("p", { class: "hint" }, "锁定收益率 = 已对冲部分的锁定盈亏 ÷ 其成本；“每小时成交”和“每小时锁定利润”按实际挂单时长计算，是判断这个市场值不值得继续挂的历史依据。"),
+      card(null, table(rows)),
+    );
+  }
+
+  // ------------------------------------------------------------------
+  // 机会：哪些市场值得挂
+  // ------------------------------------------------------------------
+  var oppState = { data: null, error: null, at: 0, loading: false, scanning: false, sort: sget("localStorage", "console.oppSort", "perDay") };
+  var QUEUE = { ahead: ["领先买一", "ok"], join: ["与买一同价", "warn"], behind: ["排在买一之后", "bad"], empty: ["簿上无买单", "ok"] };
+  function loadOpp() {
+    oppState.loading = true;
+    oppState.at = Date.now();
+    return api("GET", "/api/console/opportunities")
+      .then(function (d) {
+        oppState.data = d;
+        oppState.error = null;
+      })
+      .catch(function (e) {
+        oppState.error = e.message;
+      })
+      .finally(function () {
+        oppState.loading = false;
+        if (S.tab === "scan") renderView();
+      });
+  }
+  function runScan() {
+    oppState.scanning = true;
+    renderView();
+    toast("正在扫描候选市场（核对 + 拉取两边订单簿），可能需要几十秒…");
+    api("POST", "/api/console/opportunities/scan", {})
+      .then(function (d) {
+        oppState.data = d;
+        oppState.at = Date.now();
+        var c = d.candidates;
+        toast("扫描完成：" + (c ? c.rows.length : 0) + " 个可交易候选" + (c && c.rejected ? "，" + c.rejected + " 个未通过核对" : ""), "ok");
+      })
+      .catch(function (e) {
+        toast(e.message, "bad");
+      })
+      .finally(function () {
+        oppState.scanning = false;
+        if (S.tab === "scan") renderView();
+      });
+  }
+  function dirText(d) {
+    return VENUE[d.makerVenue] + " 挂买 " + d.makerTeam + " → " + VENUE[d.makerVenue === "predict" ? "polymarket" : "predict"] + " 买 " + d.hedgeTeam;
+  }
+  function sortRows(rows) {
+    var key = {
+      perDay: function (r) { return r.best ? (r.best.returnPerDay !== null ? r.best.returnPerDay : r.best.returnPct || 0) : -1e9; },
+      perShare: function (r) { return r.best ? r.best.profitPerShare : -1e9; },
+      total: function (r) { return r.best ? r.best.profitTotal : -1e9; },
+      start: function (r) { return r.hoursToStart === null ? -1e9 : -r.hoursToStart; },
+    }[oppState.sort] || function (r) { return r.best ? r.best.returnPerDay : -1e9; };
+    var tier = function (r) { return r.best ? (r.best.queue === "behind" ? 1 : 2) : 0; };
+    return rows.slice().sort(function (a, b) {
+      if (oppState.sort !== "start" && tier(b) !== tier(a)) return tier(b) - tier(a);
+      return key(b) - key(a);
+    });
+  }
+  function openDirections(r) {
+    showDialog({
+      title: "四个方向：" + r.labels.A + " vs " + r.labels.B,
+      body: [
+        h("p", { class: "hint" }, "每个方向 = 在一个平台挂买一支队，成交后在另一个平台买对手队。“盈利上限价”是在当前对冲盘口下还能满足最低利润的最高挂价；“买一”已扣除自己的挂单。"),
+        table(
+          r.directions.map(function (d) {
+            var q = d.queue ? QUEUE[d.queue] : null;
+            return {
+              方向: dirText(d),
+              可挂: d.ok ? "是" : h("span", { class: "bad" }, "否"),
+              "建议挂价 / 上限": d.ok ? px(d.price) + " / " + px(d.makerPriceMax) : "-",
+              "买一 / 卖一": px(d.bestBid) + " / " + px(d.bestAsk),
+              排位: q ? badge(q[0], q[1]) : "-",
+              "上限比买一高": d.edgeTicks === null ? "-" : d.edgeTicks + " tick",
+              可挂份额: d.size === null ? "-" : money(d.size),
+              每份利润: px(d.profitPerShare),
+              每对资金: px(d.capitalPerShare),
+              收益率: pctFmt(d.returnPct, 2),
+              每天收益率: pctFmt(d.returnPerDay, 2),
+              原因: d.reason || "-",
+            };
+          }),
+        ),
+      ],
+    });
+  }
+  function viewOpportunities() {
+    if (!oppState.loading && !oppState.data && !oppState.error) loadOpp();
+    var sel = h(
+      "select",
+      { onchange: function () { oppState.sort = sel.value; sset("localStorage", "console.oppSort", sel.value); renderView(); } },
+      [["perDay", "按每天资金收益率"], ["perShare", "按每份利润"], ["total", "按可挂的总利润"], ["start", "按开赛时间（近的在前）"]].map(function (o) { return h("option", { value: o[0] }, o[1]); }),
+    );
+    sel.value = oppState.sort;
+    var d = oppState.data;
+    var cands = d && d.candidates;
+    var head = h(
+      "div",
+      { class: "section-head" },
+      h("h2", null, "哪些市场值得挂"),
+      sel,
+      canControl() ? btn(oppState.scanning ? "扫描中…" : "扫描候选市场", runScan, "primary", "遍历 Predict 电竞整场胜负盘，核对并拉取两边订单簿", oppState.scanning) : null,
+      cands ? h("span", { class: "hint" }, "候选扫描于 " + cands.at) : h("span", { class: "hint" }, canControl() ? "还没扫描候选市场（下面只有已配置的配对）" : "只读：扫描候选市场需要控制口令"),
+    );
+    var note = h(
+      "div",
+      { class: "hint" },
+      h("p", null, "怎么看：先看“排位”——领先买一或簿上无买单才容易成交，排在买一之后基本等不到成交；再看“每天收益率”——同样的每份利润，开赛越近资金锁得越短，资金效率越高；“可挂份额”受对冲盘深度限制；Polymarket 24 小时成交额反映这个市场活不活跃。"),
+      h("p", null, d ? d.assumptions : ""),
+    );
+    if (oppState.error) return h("div", null, head, note, h("div", { class: "msg bad" }, oppState.error));
+    if (!d) return h("div", null, head, note, h("p", { class: "mut" }, "加载中…"));
+    var rows = d.configured.concat(cands ? cands.rows : []);
+    var table1 = table(
+      sortRows(rows).map(function (r) {
+        var b = r.best;
+        var v = VERIFY[r.verifyStatus] || [r.verifyStatus, ""];
+        var q = b && b.queue ? QUEUE[b.queue] : null;
+        var firstReason = r.directions.filter(function (x) { return x.reason; })[0];
+        return {
+          比赛: h("div", null, r.labels.A + " vs " + r.labels.B, r.question ? h("div", { class: "hint" }, r.question) : null),
+          来源: r.source === "configured" ? h("span", null, "已配置 " + r.configuredAs, r.tradeable === false ? h("div", { class: "hint warn" }, "当前不挂单") : null) : h("span", null, badge(v[0], v[1]), r.configuredAs ? h("div", { class: "hint" }, "已配置为 " + r.configuredAs) : null),
+          开赛: (r.startTime || "-") + (r.hoursToStart !== null ? "（" + hoursFmt(r.hoursToStart) + "后）" : ""),
+          停止挂单: hoursFmt(r.hoursToStop),
+          最佳方向: b ? dirText(b) : h("span", { class: "mut" }, "四个方向都不可挂" + (firstReason ? "：" + firstReason.reason : "")),
+          "挂价 / 上限": b ? px(b.price) + " / " + px(b.makerPriceMax) : "-",
+          排位: q ? badge(q[0], q[1]) : "-",
+          可挂份额: b ? money(b.size) : "-",
+          每份利润: b ? px(b.profitPerShare) : "-",
+          可挂总利润: b ? money(b.profitTotal) : "-",
+          每对资金: b ? px(b.capitalPerShare) : "-",
+          收益率: b ? pctFmt(b.returnPct, 2) : "-",
+          每天收益率: b ? h("strong", null, pctFmt(b.returnPerDay, 2)) : "-",
+          "PM 24h 成交": usdK(r.pmVolume24h),
+          操作: h(
+            "div",
+            { class: "actions" },
+            btn("四个方向", function () { openDirections(r); }),
+            r.source === "candidate" && !r.configuredAs && canControl() && b ? btn("添加", function () { openAddPair({ predictMarketId: r.predictMarketId, polymarketConditionId: r.polymarketConditionId, maker: { venue: b.makerVenue, outcome: b.makerOutcome } }); }, "primary") : null,
+            r.source === "configured" && b && r.current && (r.current.venue !== b.makerVenue || r.current.outcome !== b.makerOutcome) ? h("div", { class: "hint warn" }, "当前方向不是最佳") : null,
+          ),
+        };
+      }),
+    );
+    var errs = cands && cands.errors && cands.errors.length ? h("div", { class: "msg warn" }, "扫描时部分数据没拿到：" + cands.errors.join("；")) : null;
+    return h("div", null, head, note, errs, card(null, table1));
   }
 
   // ------------------------------------------------------------------
