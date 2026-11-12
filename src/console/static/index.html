@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>对冲机器人控制台</title>
+<link rel="stylesheet" href="/console.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">Polymarket × Predict 对冲控制台</div>
+  <span id="mode" class="badge"></span>
+  <span id="clock" class="mut small"></span>
+  <span class="spacer"></span>
+  <span id="who" class="mut small"></span>
+  <button id="loginBtn" class="btn" type="button">登录</button>
+</header>
+<div id="banner"></div>
+<nav id="tabs" class="tabs" aria-label="页面"></nav>
+<main id="view"><p class="mut">加载中…</p></main>
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+<dialog id="dlg" aria-modal="true"><div id="dlgBody"></div></dialog>
+<script src="/console.js"></script>
+</body>
+</html>

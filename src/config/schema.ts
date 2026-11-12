@@ -4,6 +4,26 @@ const num = z.coerce.number();
 const nonneg = num.min(0);
 const price01 = num.gt(0).lt(1);
 
+const HedgeObject = z.object({
+  /** 正常补单可接受的每份最低利润（可为负，表示允许小亏完成对冲） */
+  minProfitPerShare: num.default(0),
+  retryIntervalMs: nonneg.default(1500),
+  maxNormalAttempts: z.coerce.number().int().min(1).default(5),
+  /** 吃单回执后等待 WebSocket 成交推送的时间，超时用 REST 补拉 */
+  fillGraceMs: nonneg.default(8000),
+  /** 吃单请求超时 */
+  requestTimeoutMs: nonneg.default(10000),
+  /** 成交合并窗口（毫秒）：窗口内到达的成交先净额再补单，0 表示立即补单 */
+  coalesceMs: nonneg.default(100),
+});
+
+const ResidualObject = z.object({
+  /** 不处理的零头份额 */
+  dustShares: nonneg.default(0.2),
+  /** 残余低于最小单时等待更多成交的时间 */
+  maxWaitSec: nonneg.default(30),
+});
+
 export const StrategySchema = z.object({
   /** 补单触发标准：matched=已撮合即补；settled=结算成功后才补 */
   hedgeTrigger: z.enum(["matched", "settled"]).default("matched"),
@@ -33,31 +53,27 @@ export const StrategySchema = z.object({
   maxBookAgeMs: nonneg.default(15000),
   /** 紧急处理结束后暂停该配对挂单的时长（秒） */
   emergencyCooldownSec: nonneg.default(300),
-  hedge: z
-    .object({
-      /** 正常补单可接受的每份最低利润（可为负，表示允许小亏完成对冲） */
-      minProfitPerShare: num.default(0),
-      retryIntervalMs: nonneg.default(1500),
-      maxNormalAttempts: z.coerce.number().int().min(1).default(5),
-      /** 吃单回执后等待 WebSocket 成交推送的时间，超时用 REST 补拉 */
-      fillGraceMs: nonneg.default(8000),
-      /** 吃单请求超时 */
-      requestTimeoutMs: nonneg.default(10000),
-      /** 成交合并窗口（毫秒）：窗口内到达的成交先净额再补单，0 表示立即补单 */
-      coalesceMs: nonneg.default(100),
-    })
-    .default({}),
-  residual: z
-    .object({
-      /** 不处理的零头份额 */
-      dustShares: nonneg.default(0.2),
-      /** 残余低于最小单时等待更多成交的时间 */
-      maxWaitSec: nonneg.default(30),
-    })
-    .default({}),
+  hedge: HedgeObject.default({}),
+  residual: ResidualObject.default({}),
 });
 
 export type StrategyConfig = z.infer<typeof StrategySchema>;
+
+/**
+ * 策略覆盖项：只包含显式填写的字段。嵌套的 hedge / residual 也只取填写的字段，
+ * 不补默认值（否则配对只改一项补单参数时，会把全局配置的其他补单参数冲回默认值）。
+ */
+export const StrategyPatchSchema = StrategySchema.omit({ hedge: true, residual: true })
+  .partial()
+  .extend({ hedge: HedgeObject.partial().optional(), residual: ResidualObject.partial().optional() });
+
+/** 控制台使用的严格版本：未知字段直接报错，防止拼写错误被静默忽略。 */
+export const StrategyPatchStrictSchema = StrategySchema.omit({ hedge: true, residual: true })
+  .partial()
+  .extend({ hedge: HedgeObject.partial().strict().optional(), residual: ResidualObject.partial().strict().optional() })
+  .strict();
+
+export type StrategyPatch = z.infer<typeof StrategyPatchSchema>;
 
 export const RiskSchema = z.object({
   maxOrderShares: num.positive().default(500),
@@ -91,6 +107,10 @@ export const RiskSchema = z.object({
 
 export type RiskConfig = z.infer<typeof RiskSchema>;
 
+export const RiskPatchSchema = RiskSchema.partial();
+export const RiskPatchStrictSchema = RiskSchema.partial().strict();
+export type RiskPatch = z.infer<typeof RiskPatchSchema>;
+
 export const PairConfigSchema = z.object({
   id: z.string().min(1),
   enabled: z.boolean().default(true),
@@ -102,8 +122,8 @@ export const PairConfigSchema = z.object({
     outcome: z.enum(["A", "B"]).optional(),
     team: z.string().optional(),
   }),
-  strategy: StrategySchema.partial().default({}),
-  risk: RiskSchema.partial().default({}),
+  strategy: StrategyPatchSchema.default({}),
+  risk: RiskPatchSchema.default({}),
   note: z.string().optional(),
 });
 
@@ -115,11 +135,14 @@ export const AppConfigSchema = z.object({
   dataDir: z.string().default("./data"),
   logLevel: z.string().default("info"),
   logFile: z.string().nullable().default(null),
+  /** 网页控制台（状态 + 控制）。控制操作需要环境变量 CONSOLE_TOKEN；默认只监听本机，远程请用 SSH 隧道 */
   statusServer: z
     .object({
       enabled: z.boolean().default(true),
       host: z.string().default("127.0.0.1"),
       port: z.coerce.number().int().default(8787),
+      /** 允许的 Host 头（防 DNS 重绑定）；localhost 与 IP 直连总是允许，用域名访问时把域名加到这里 */
+      allowedHosts: z.array(z.string()).default([]),
     })
     .default({}),
   predict: z
@@ -171,6 +194,8 @@ export const AppConfigSchema = z.object({
       latencyMs: nonneg.default(150),
       /** 真实盘口穿过挂价时按此比例模拟成交（0~1） */
       makerFillRatio: num.min(0).max(1).default(1),
+      /** 模拟成交从“已撮合”到“结算成功”的延迟 */
+      settleDelayMs: nonneg.default(2000),
     })
     .default({}),
 });
@@ -194,21 +219,40 @@ export interface Secrets {
   polymarketRelayerApiKey: string | null;
   polymarketRelayerApiKeyAddress: string | null;
   alertWebhookUrl: string | null;
+  /** 控制台只读口令（可选）：设置后查看状态也需要口令 */
   statusToken: string | null;
+  /** 控制台控制口令：未设置时控制台只读 */
+  consoleToken: string | null;
+}
+
+/** 去掉值为 undefined 的键（展开合并时 undefined 会覆盖已有值）。 */
+function defined<T extends object>(o: T | undefined): Partial<T> {
+  const out: Partial<T> = {};
+  for (const [k, v] of Object.entries(o ?? {})) if (v !== undefined) (out as Record<string, unknown>)[k] = v;
+  return out;
+}
+
+/** 在完整策略上叠加覆盖项（嵌套对象逐字段合并）。 */
+export function applyStrategyPatch(base: StrategyConfig, o: StrategyPatch | undefined): StrategyConfig {
+  const { hedge, residual, ...top } = o ?? {};
+  return { ...base, ...defined(top), hedge: { ...base.hedge, ...defined(hedge) }, residual: { ...base.residual, ...defined(residual) } };
+}
+
+/** 合并两层覆盖项（后者优先，嵌套对象逐字段合并）。 */
+export function mergeStrategyPatch(a: StrategyPatch | undefined, b: StrategyPatch | undefined): StrategyPatch {
+  const { hedge: ha, residual: ra, ...ta } = a ?? {};
+  const { hedge: hb, residual: rb, ...tb } = b ?? {};
+  const out: StrategyPatch = { ...defined(ta), ...defined(tb) };
+  if (ha || hb) out.hedge = { ...defined(ha), ...defined(hb) };
+  if (ra || rb) out.residual = { ...defined(ra), ...defined(rb) };
+  return out;
 }
 
 /** 合并全局策略与配对覆盖项。 */
 export function effectiveStrategy(app: AppConfig, pair: PairConfig): StrategyConfig {
-  const base = app.strategy;
-  const o = pair.strategy ?? {};
-  return {
-    ...base,
-    ...o,
-    hedge: { ...base.hedge, ...(o.hedge ?? {}) },
-    residual: { ...base.residual, ...(o.residual ?? {}) },
-  };
+  return applyStrategyPatch(app.strategy, pair.strategy);
 }
 
 export function effectiveRisk(app: AppConfig, pair: PairConfig): RiskConfig {
-  return { ...app.risk, ...(pair.risk ?? {}) };
+  return { ...app.risk, ...defined(pair.risk) };
 }

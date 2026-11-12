@@ -130,6 +130,30 @@ const MIGRATIONS: string[] = [
   `,
   // v2：成交的本机首次收到时间（统计补单耗时用）
   `ALTER TABLE fills ADD COLUMN received_at INTEGER;`,
+  // v3：控制台——配对覆盖项（含控制台新增的配对、删除标记）与操作审计
+  `
+  CREATE TABLE IF NOT EXISTS pair_overrides (
+    id TEXT PRIMARY KEY,
+    base TEXT,
+    patch TEXT NOT NULL,
+    deleted INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS audit_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts INTEGER NOT NULL,
+    actor TEXT NOT NULL,
+    source TEXT NOT NULL,
+    ip TEXT,
+    action TEXT NOT NULL,
+    target TEXT,
+    params TEXT,
+    ok INTEGER NOT NULL,
+    result TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts);
+  `,
 ];
 
 export class Db {

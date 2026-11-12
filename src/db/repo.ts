@@ -446,6 +446,22 @@ export class Repo {
     return (this.db.raw.prepare("SELECT * FROM pairs ORDER BY updated_at DESC").all() as Record<string, unknown>[]).map(toPair);
   }
 
+  /** 轻量列表（控制台轮询用）：不解析规则原文与核对详情。 */
+  listPairSummaries(statuses: string[]): { id: string; status: string; statusReason: string | null; labels: unknown; startTime: number | null }[] {
+    if (statuses.length === 0) return [];
+    const marks = statuses.map(() => "?").join(",");
+    const rows = this.db.raw
+      .prepare(`SELECT id, status, status_reason, json_extract(definition, '$.labels') AS labels, json_extract(definition, '$.startTime') AS start_time FROM pairs WHERE status IN (${marks}) ORDER BY updated_at DESC`)
+      .all(...statuses) as Record<string, unknown>[];
+    return rows.map((r) => ({
+      id: String(r.id),
+      status: String(r.status),
+      statusReason: (r.status_reason as string | null) ?? null,
+      labels: typeof r.labels === "string" ? parse(r.labels) : null,
+      startTime: r.start_time === null || r.start_time === undefined ? null : Number(r.start_time),
+    }));
+  }
+
   setPairStatus(id: string, status: string, reason: string | null, now: number): void {
     this.db.raw.prepare("UPDATE pairs SET status=?,status_reason=?,updated_at=? WHERE id=?").run(status, reason, now, id);
   }
@@ -534,6 +550,88 @@ export class Repo {
   setKv(k: string, v: string, now: number): void {
     this.db.raw.prepare("INSERT INTO kv(k,v,updated_at) VALUES (?,?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v, updated_at=excluded.updated_at").run(k, v, now);
   }
+
+  deleteKv(k: string): void {
+    this.db.raw.prepare("DELETE FROM kv WHERE k=?").run(k);
+  }
+
+  // ---------------- 控制台：配对覆盖项 ----------------
+  getPairOverride(id: string): PairOverrideRow | null {
+    const r = this.db.raw.prepare("SELECT * FROM pair_overrides WHERE id=?").get(id) as Record<string, unknown> | undefined;
+    return r ? toOverride(r) : null;
+  }
+
+  listPairOverrides(): PairOverrideRow[] {
+    return (this.db.raw.prepare("SELECT * FROM pair_overrides ORDER BY created_at, id").all() as Record<string, unknown>[]).map(toOverride);
+  }
+
+  upsertPairOverride(o: { id: string; base?: unknown; patch: unknown; deleted: boolean; now: number }): void {
+    const cur = this.getPairOverride(o.id);
+    const base = o.base === undefined ? (cur?.base ?? null) : o.base;
+    this.db.raw
+      .prepare(
+        "INSERT INTO pair_overrides(id,base,patch,deleted,created_at,updated_at) VALUES (?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET base=excluded.base, patch=excluded.patch, deleted=excluded.deleted, updated_at=excluded.updated_at",
+      )
+      .run(o.id, base === null ? null : json(base), json(o.patch), o.deleted ? 1 : 0, cur?.createdAt ?? o.now, o.now);
+  }
+
+  // ---------------- 操作审计 ----------------
+  insertAudit(a: { ts: number; actor: string; source: string; ip: string | null; action: string; target: string | null; params: unknown; ok: boolean; result: unknown }): number {
+    const r = this.db.raw
+      .prepare("INSERT INTO audit_log(ts,actor,source,ip,action,target,params,ok,result) VALUES (?,?,?,?,?,?,?,?,?)")
+      .run(a.ts, a.actor, a.source, a.ip, a.action, a.target, json(a.params ?? null), a.ok ? 1 : 0, json(a.result ?? null));
+    return Number(r.lastInsertRowid);
+  }
+
+  listAudit(limit = 100): AuditRow[] {
+    return (this.db.raw.prepare("SELECT * FROM audit_log ORDER BY id DESC LIMIT ?").all(limit) as Record<string, unknown>[]).map((r) => ({
+      id: Number(r.id),
+      ts: Number(r.ts),
+      actor: String(r.actor),
+      source: String(r.source),
+      ip: (r.ip as string | null) ?? null,
+      action: String(r.action),
+      target: (r.target as string | null) ?? null,
+      params: parse(r.params),
+      ok: Number(r.ok) === 1,
+      result: parse(r.result),
+    }));
+  }
+}
+
+export interface PairOverrideRow {
+  id: string;
+  /** 控制台新增的配对：完整配置；配置文件中的配对：null */
+  base: unknown;
+  /** 控制台修改的覆盖项 */
+  patch: unknown;
+  deleted: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
+function toOverride(r: Record<string, unknown>): PairOverrideRow {
+  return {
+    id: String(r.id),
+    base: parse(r.base),
+    patch: parse(r.patch) ?? {},
+    deleted: Number(r.deleted) === 1,
+    createdAt: Number(r.created_at),
+    updatedAt: Number(r.updated_at),
+  };
+}
+
+export interface AuditRow {
+  id: number;
+  ts: number;
+  actor: string;
+  source: string;
+  ip: string | null;
+  action: string;
+  target: string | null;
+  params: unknown;
+  ok: boolean;
+  result: unknown;
 }
 
 export interface PairRow {

@@ -8,7 +8,7 @@ import { VENUES } from "./core/types.js";
 import { isLive, loadConfig, predictUrls } from "./config/load.js";
 import { createContext, loadPairs, refreshBalances, runBot } from "./app.js";
 import { acceptPositionsAsBaseline } from "./engine/reconcile.js";
-import { startStatusServer } from "./monitor/status.js";
+import { startConsoleServer } from "./console/server.js";
 import { computeHedgeStats, statsSummary } from "./monitor/stats.js";
 import { polymarketGeoblock } from "./market/geoblock.js";
 import { Db } from "./db/db.js";
@@ -44,13 +44,13 @@ const HELP = `用法: node dist/cli.js <命令> [参数]
                                         核对指定的两个子盘口，打印检查项与结算情形矩阵
   pairs list                            列出已核对的配对
   pairs show <pairId>                   查看配对详情（含两边规则原文）
-  pairs approve <pairId> --note "原因"  人工批准“待审核”配对（规则版本变化后需重新批准）
-  status [--url http://127.0.0.1:8787]  查看运行中机器人的状态
+  pairs approve <pairId> --note "原因"  人工批准“待审核”配对（规则版本变化后需重新批准；也可在网页控制台审批）
+  status [--url http://127.0.0.1:8787]  查看运行中机器人的状态（网页控制台同一地址，见 README）
   stats [--db live|sim] [--hours 24] [--pair id] [--json] [--samples]
                                         补单统计：第一腿成交到第二腿成交的耗时 P50/P95、分段耗时、补单失败率、滑点
   books <predictMarketId> <polymarketConditionId>
                                         打印两边当前订单簿（REST）
-  resume                                解除全局“停止新挂单”
+  resume                                解除全局“停止新挂单”（机器人未运行时用；运行中请在网页控制台操作）
   accept-positions <pairId>             人工确认：把当前交易所持仓与台账的差额记为基线
 
 通用参数: --config config/config.yaml --pairs config/pairs.yaml --env .env
@@ -124,7 +124,7 @@ async function main(): Promise<void> {
     case "run": {
       if (isLive(cfg)) log.warn("⚠ 实盘模式：将使用真实资金下单");
       const stop = await runBot(ctx);
-      const server = startStatusServer(ctx);
+      const server = startConsoleServer(ctx);
       let stopping = false;
       const shutdown = async (sig: string) => {
         if (stopping) return;
@@ -199,7 +199,10 @@ async function main(): Promise<void> {
         const id = rest[0];
         const note = String(args.flags.note ?? "");
         if (!id || !note) throw new Error('用法：pairs approve <pairId> --note "批准理由"');
+        const cur = ctx.pairing.get(id);
+        if (cur && cur.status !== "PENDING_REVIEW") throw new Error(`只能批准“待审核”的配对，当前状态为 ${cur.status}`);
         const p = ctx.pairing.approve(id, note);
+        ctx.repo.insertAudit({ ts: Date.now(), actor: process.env.USER ?? "cli", source: "cli", ip: null, action: "pair.approve", target: id, params: { note }, ok: true, result: { status: p.status } });
         console.log(`已批准 ${p.id}（规则版本 ${p.approvedRulesHash?.slice(0, 12)}）；规则变化后需重新批准`);
       } else throw new Error(HELP);
       ctx.db.close();
@@ -224,8 +227,10 @@ async function main(): Promise<void> {
       return;
     }
     case "resume": {
+      const prev = ctx.risk.halted;
       ctx.risk.resume();
-      console.log("已解除全局停止新挂单（运行中的机器人需重启或等待其读取状态）");
+      ctx.repo.insertAudit({ ts: Date.now(), actor: process.env.USER ?? "cli", source: "cli", ip: null, action: "global.resume", target: null, params: {}, ok: true, result: { previous: prev } });
+      console.log("已解除全局停止新挂单（只修改了数据库；运行中的机器人请在网页控制台点“解除停止”，否则要重启后才生效）");
       process.exit(0);
       return;
     }

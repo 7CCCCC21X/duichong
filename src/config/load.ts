@@ -59,6 +59,7 @@ export function loadSecrets(): Secrets {
     polymarketRelayerApiKeyAddress: env("POLYMARKET_RELAYER_API_KEY_ADDRESS"),
     alertWebhookUrl: env("ALERT_WEBHOOK_URL"),
     statusToken: env("STATUS_TOKEN"),
+    consoleToken: env("CONSOLE_TOKEN"),
   };
   for (const v of [
     s.predictApiKey,
@@ -70,6 +71,7 @@ export function loadSecrets(): Secrets {
     s.polymarketRelayerApiKey,
     s.alertWebhookUrl,
     s.statusToken,
+    s.consoleToken,
   ]) {
     registerSecret(v);
   }

@@ -130,6 +130,8 @@ export class PolymarketLiveVenue implements TradingVenue {
   private known = new Map<string, { tokenId: string; side: Side }>();
   private allowanceIssue: string | null = null;
   private lastReauth = 0;
+  /** 最近一次成交推送订阅帧里的市场（conditionId，小写） */
+  private subscribedMarkets = new Set<string>();
 
   constructor(private readonly o: PolymarketLiveOptions) {}
 
@@ -155,6 +157,7 @@ export class PolymarketLiveVenue implements TradingVenue {
       idleTimeoutMs: 120_000,
       onOpen: (w) => {
         const markets = this.o.markets();
+        this.subscribedMarkets = new Set(markets.map((m) => m.toLowerCase()));
         w.send({ auth: { apiKey: String(creds.key), secret: creds.secret, passphrase: creds.passphrase }, type: "user", ...(markets.length ? { markets } : {}) });
       },
       onMessage: (t) => this.handleUserMessage(t),
@@ -184,6 +187,19 @@ export class PolymarketLiveVenue implements TradingVenue {
   async stop(): Promise<void> {
     this.ws?.stop();
     if (this.hbTimer) clearInterval(this.hbTimer);
+  }
+
+  /**
+   * 运行中新增配对后调用：成交推送的订阅帧在连接建立时发送，未包含新市场时重连一次，
+   * 让新的订阅帧带上它（官方文档的“连接后追加订阅”在本环境无法核实，这里用确定有效的重连方式）。
+   * 重连期间事件流短暂断开，按断线流程暂停挂单，恢复后先对账（会用 REST 补拉成交）再挂单。返回是否触发了重连。
+   */
+  ensureMarkets(conditionIds: string[]): boolean {
+    if (!this.ws) return false;
+    const missing = conditionIds.filter((c) => !this.subscribedMarkets.has(c.toLowerCase()));
+    if (missing.length === 0) return false;
+    this.ws.reconnect(`成交推送订阅新增市场 ${missing.join(",")}`);
+    return true;
   }
 
   onEvent(handler: (e: VenueEvent) => void): void {

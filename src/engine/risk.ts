@@ -50,7 +50,7 @@ export class RiskManager {
   constructor(
     private readonly repo: Repo,
     private readonly clock: Clock,
-    readonly global: RiskConfig,
+    public global: RiskConfig,
   ) {
     const h = repo.getKv("risk.halt");
     if (h) this.haltState = JSON.parse(h) as { reason: string; since: number };
@@ -59,6 +59,11 @@ export class RiskManager {
       const parsed = JSON.parse(l) as { day: string; usd: string };
       this.lossToday = { day: parsed.day, usd: BigInt(parsed.usd) };
     }
+  }
+
+  /** 控制台修改全局风控参数后调用。 */
+  setGlobal(r: RiskConfig): void {
+    this.global = r;
   }
 
   // ---------------- 余额与预占 ----------------
@@ -158,8 +163,7 @@ export class RiskManager {
 
   resume(): void {
     this.haltState = null;
-    this.repo.setKv("risk.halt", "", this.clock.now());
-    this.repo.db.raw.prepare("DELETE FROM kv WHERE k='risk.halt'").run();
+    this.repo.deleteKv("risk.halt");
   }
 
   get halted(): { reason: string; since: number } | null {

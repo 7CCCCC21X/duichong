@@ -1,4 +1,3 @@
-import { createServer, type Server } from "node:http";
 import { toStr, type Fx } from "../core/fixed.js";
 import { bjTime, fmtDuration } from "../core/time.js";
 import { VENUES, type Outcome, type VenueId } from "../core/types.js";
@@ -141,62 +140,4 @@ export function statusJson(ctx: AppContext): Record<string, unknown> {
     待审核或未通过的配对: [...ctx.stored.values()].filter((p) => p.status !== "APPROVED" && p.status !== "APPROVED_MANUAL").map((p) => ({ 配对: p.id, 状态: p.status, 原因: p.statusReason })),
     告警: ctx.alerts.recent.slice(0, 30).map((a) => ({ 时间: bjTime(a.ts), 级别: a.level, 代码: a.code, 配对: a.pairId ?? "-", 内容: a.message })),
   };
-}
-
-const PAGE = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>对冲机器人状态</title>
-<style>
-:root{--bg:#fff;--fg:#1d1d1f;--mut:#6e6e73;--line:#e5e5ea;--warn:#b25000;--bad:#c00;--ok:#1a7f37;--card:#f7f7f9}
-@media (prefers-color-scheme:dark){:root{--bg:#141416;--fg:#ececf0;--mut:#9a9aa2;--line:#2c2c30;--card:#1c1c20;--warn:#ffa94d;--bad:#ff6b6b;--ok:#51cf66}}
-body{margin:0;padding:16px;background:var(--bg);color:var(--fg);font:13px/1.5 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif}
-h1{font-size:18px;margin:0 0 8px}h2{font-size:15px;margin:18px 0 6px}h3{font-size:13px;margin:12px 0 4px;color:var(--mut)}
-.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin:8px 0;overflow-x:auto}
-table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}td,th{border-bottom:1px solid var(--line);padding:3px 6px;text-align:left;white-space:nowrap}th{color:var(--mut);font-weight:500}
-.kv{display:grid;grid-template-columns:max-content 1fr;gap:2px 12px}.kv div:nth-child(odd){color:var(--mut)}
-.bad{color:var(--bad)}.warn{color:var(--warn)}.ok{color:var(--ok)}.mut{color:var(--mut)}
-</style></head><body><h1>Polymarket × Predict 对冲机器人</h1><div id="root" class="mut">加载中…</div>
-<script>
-const esc=s=>String(s??"-").replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
-const kv=o=>'<div class="kv">'+Object.entries(o||{}).map(([k,v])=>'<div>'+esc(k)+'</div><div>'+(typeof v==="object"&&v!==null?esc(JSON.stringify(v)):esc(v))+'</div>').join("")+'</div>';
-const table=rows=>{if(!rows||!rows.length)return '<div class="mut">无</div>';const ks=Object.keys(rows[0]);return '<table><tr>'+ks.map(k=>'<th>'+esc(k)+'</th>').join("")+'</tr>'+rows.map(r=>'<tr>'+ks.map(k=>'<td>'+esc(typeof r[k]==="object"&&r[k]!==null?JSON.stringify(r[k]):r[k])+'</td>').join("")+'</tr>').join("")+'</table>'};
-async function load(){try{const q=new URLSearchParams(location.search);const r=await fetch('/api/status'+(q.get('token')?'?token='+encodeURIComponent(q.get('token')):''));const s=await r.json();
-let h='<div class="card">'+kv({模式:s.模式,当前时间:s.当前时间,启动时间:s.启动时间,全局停止新挂单:s.全局停止新挂单?s.全局停止新挂单.原因:'否',当日亏损:s.当日亏损,行情连接:s.行情连接,交易连接:s.交易连接,余额:s.余额})+'</div>';
-if(s.平台阻断.length)h+='<div class="card warn">'+table(s.平台阻断)+'</div>';
-for(const p of s.配对){h+='<h2>'+esc(p.配对)+'：'+esc(p.队伍.A)+' vs '+esc(p.队伍.B)+'</h2><div class="card">'+kv({挂单方向:p.挂单方向,挂单状态:p.挂单状态+'：'+(p.挂单说明??''),敞口状态:p.敞口状态+'：'+(p.敞口说明??''),紧急处理:p.紧急处理?JSON.stringify(p.紧急处理):'无',开赛时间:p.开赛时间,停止挂单时间:p.停止挂单时间,净敞口:p.净敞口_份,预计敞口:p.含在途补单的预计敞口_份,裸仓:p.裸仓开始??'无',盈亏:p.盈亏,补单平均耗时:p.补单耗时.平均,最近报价:p.最近报价})+'</div>';
-h+='<h3>盘口（前 5 档）</h3><div class="card">'+table(Object.entries(p.盘口).map(([k,b])=>({品种:k,延迟:b?.延迟,买:(b?.买||[]).join('  '),卖:(b?.卖||[]).join('  ')})))+'</div>';
-h+='<h3>持仓</h3><div class="card">'+table(Object.entries(p.持仓).map(([v,o])=>({平台:v,...o})))+'</div>';
-h+='<h3>订单</h3><div class="card">'+table(p.订单)+'</div><h3>成交</h3><div class="card">'+table(p.成交)+'</div><h3>补单耗时</h3><div class="card">'+table(p.补单耗时.最近)+'</div>'}
-if(s.补单统计_近7天)h+='<h2>补单统计（近 7 天）</h2>'+Object.entries(s.补单统计_近7天).map(([k,v])=>'<div class="card"><b>'+esc(k)+'</b>'+kv(v)+'</div>').join('');
-if(s.待审核或未通过的配对.length)h+='<h2>待审核 / 未通过的配对</h2><div class="card">'+table(s.待审核或未通过的配对)+'</div>';
-h+='<h2>告警</h2><div class="card">'+table(s.告警)+'</div>';document.getElementById('root').innerHTML=h}catch(e){document.getElementById('root').textContent='读取状态失败：'+e}}
-load();setInterval(load,2000);
-</script></body></html>`;
-
-export function startStatusServer(ctx: AppContext): Server | null {
-  const cfg = ctx.cfg.app.statusServer;
-  if (!cfg.enabled) return null;
-  const token = ctx.cfg.secrets.statusToken;
-  const server = createServer((req, res) => {
-    const url = new URL(req.url ?? "/", "http://localhost");
-    if (token && url.pathname.startsWith("/api") && url.searchParams.get("token") !== token && req.headers["x-status-token"] !== token) {
-      res.writeHead(401).end("unauthorized");
-      return;
-    }
-    if (url.pathname === "/api/status") {
-      try {
-        const body = JSON.stringify(statusJson(ctx), (_k, v) => (typeof v === "bigint" ? v.toString() : v));
-        res.writeHead(200, { "content-type": "application/json; charset=utf-8" }).end(body);
-      } catch (e) {
-        res.writeHead(500).end(String(e));
-      }
-      return;
-    }
-    if (url.pathname === "/" || url.pathname === "/index.html") {
-      res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(PAGE);
-      return;
-    }
-    res.writeHead(404).end("not found");
-  });
-  server.listen(cfg.port, cfg.host, () => ctx.log.info({ url: `http://${cfg.host}:${cfg.port}/` }, "状态页已启动"));
-  return server;
 }

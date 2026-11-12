@@ -171,3 +171,4 @@
 13. 2026-12-01 起电竞新市场使用 Protocol V2（`positionIds`、`CONDITIONAL-V2`、ExchangeV3 授权）。
 14. Polymarket 开赛清簿时，挂单被清掉后用户频道是否推送撤单事件。
 15. Polymarket Cloudflare 限流是排队而非拒绝，可能表现为请求超时。
+16. Polymarket 用户频道能否在连接后用 `{operation: "subscribe", markets: [...]}` 追加市场（加网页控制台时本环境访问不到 docs.polymarket.com，未能核实）。控制台在运行中新增配对时，目前用重连方式让订阅帧带上新市场；实测确认追加订阅有效后可改为不重连。

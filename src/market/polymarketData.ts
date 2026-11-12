@@ -335,6 +335,13 @@ export class PolymarketBookFeed {
     for (const t of fresh) void this.refresh(t);
   }
 
+  /** 取消订阅（配对删除后），停止推送与 REST 校准。 */
+  unsubscribe(tokenIds: string[]): void {
+    const gone = tokenIds.filter((t) => this.assets.delete(t));
+    for (const t of gone) this.local.delete(t);
+    if (gone.length && this.ws.up) this.ws.send({ assets_ids: gone, operation: "unsubscribe" });
+  }
+
   /** REST 拉取全量订单簿。 */
   async refresh(tokenId: string): Promise<void> {
     try {

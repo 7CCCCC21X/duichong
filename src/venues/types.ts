@@ -123,4 +123,6 @@ export interface TradingVenue {
   health(): { userStreamUp: boolean; authOk: boolean; lastError: string | null };
   /** 需要阻断挂单的持续性问题（例如授权缺失），code 相同的问题恢复后会自动解除阻断 */
   issues?(): { code: string; message: string }[];
+  /** 运行中新增配对后，确保成交推送覆盖这些市场；返回 true 表示已触发重新订阅（事件流会短暂断开后恢复） */
+  ensureMarkets?(marketKeys: string[]): boolean;
 }

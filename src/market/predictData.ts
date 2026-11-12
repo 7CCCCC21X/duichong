@@ -325,9 +325,15 @@ export class PredictBookFeed {
     }
   }
 
-  private sendSubs(w: ResilientWs, id: number): void {
+  /** 取消订阅（配对删除后），停止推送与轮询。 */
+  unsubscribe(marketId: number): void {
+    if (!this.subs.delete(marketId)) return;
+    if (this.ws?.up) this.sendSubs(this.ws, marketId, "unsubscribe");
+  }
+
+  private sendSubs(w: ResilientWs, id: number, method: "subscribe" | "unsubscribe" = "subscribe"): void {
     for (const topic of [`predictOrderbook/${id}`, `predictTradingStatus/${id}`, `predictMarketStatus/${id}`, `predictMarketChanged/${id}`]) {
-      w.send({ method: "subscribe", requestId: this.reqId++, params: [topic] });
+      w.send({ method, requestId: this.reqId++, params: [topic] });
     }
   }
 

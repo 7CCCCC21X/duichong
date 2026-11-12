@@ -22,8 +22,8 @@ engine/ 每个配对一个 PairEngine（串行队列）               ▼
   → 按净成交补单（在途预占、超时查单）→ 残余 / 紧急处理 → 风控（限额、资金预留、停止新挂单）
   → 对账（启动、重连）
 venues/ 统一交易接口：Polymarket 实盘（官方统一 SDK）| Predict 实盘（官方 SDK + REST + 钱包事件 WS）| 模拟交易所
-db/ SQLite（Node 内置 node:sqlite，WAL）：订单意图、成交、配对与规则快照、告警、裸仓事件、审计日志
-monitor/ 状态页（北京时间）       cli.ts 命令行
+db/ SQLite（Node 内置 node:sqlite，WAL）：订单意图、成交、配对与规则快照、告警、裸仓事件、控制台覆盖项、操作审计
+console/ 网页控制台（状态 + 控制，北京时间）   monitor/ 状态数据与补单统计   cli.ts 命令行
 ```
 
 ## 环境要求与安装
@@ -37,7 +37,7 @@ npm run build
 cp config/config.example.yaml config/config.yaml
 cp config/pairs.example.yaml  config/pairs.yaml
 cp .env.example .env          # 填密钥；模拟模式可以先不填
-npm test                      # 63 项测试
+npm test                      # 84 项测试
 ```
 
 机器需要经 HTTP 代理访问外网时，启动前设置 `NODE_USE_ENV_PROXY=1`（让 Node 的 fetch 使用 `HTTPS_PROXY`），WebSocket 会自动走代理。
@@ -50,7 +50,7 @@ node dist/cli.js pairs discover                          # 遍历 Predict 电竞
 node dist/cli.js pairs verify <predictMarketId> <conditionId>   # 核对指定配对，打印检查项与结算情形矩阵
 node dist/cli.js pairs approve <pairId> --note "已人工核对延期条款"  # 待审核配对人工批准
 node dist/cli.js run                                     # 启动（默认模拟）
-# 浏览器打开 http://127.0.0.1:8787/ 查看状态；或 node dist/cli.js status
+# 浏览器打开 http://127.0.0.1:8787/ 进入网页控制台（设置 CONSOLE_TOKEN 后可操作）；或 node dist/cli.js status
 ```
 
 不需要任何凭证即可运行的真实行情检查与端到端模拟：
@@ -58,6 +58,7 @@ node dist/cli.js run                                     # 启动（默认模拟
 ```bash
 NODE_USE_ENV_PROXY=1 npx tsx scripts/live-data-check.ts 45   # 行情 WS 与 REST 逐档比对、真实深度下的补单成本
 NODE_USE_ENV_PROXY=1 npx tsx scripts/paper-e2e.ts            # 对冲侧真实 Polymarket 盘口的端到端模拟
+npx tsx scripts/console-demo.ts                              # 网页控制台离线演示（合成数据，http://127.0.0.1:8790/）
 ```
 
 ## 配置
@@ -66,7 +67,7 @@ NODE_USE_ENV_PROXY=1 npx tsx scripts/paper-e2e.ts            # 对冲侧真实 P
 | --- | --- |
 | `config/config.yaml` | 模式、两边接口参数、全局策略默认值、风控限额、模拟参数（见 `config.example.yaml` 注释） |
 | `config/pairs.yaml` | 要交易的配对：Predict 市场 ID、Polymarket conditionId、挂单平台与方向、策略/风控覆盖项 |
-| `.env` | 全部密钥（只从环境变量读取，日志自动脱敏）、`LIVE_TRADING` 实盘开关、告警 webhook、状态页口令 |
+| `.env` | 全部密钥（只从环境变量读取，日志自动脱敏）、`LIVE_TRADING` 实盘开关、告警 webhook、控制台口令（`CONSOLE_TOKEN` 控制、`STATUS_TOKEN` 只读） |
 
 **实盘开关**：必须同时满足 `config.yaml` 中 `mode: live` 与 `.env` 中 `LIVE_TRADING=true`，否则一律模拟。模拟与实盘使用不同数据库文件（`data/sim.db` / `data/live.db`）。
 
@@ -137,9 +138,46 @@ NODE_USE_ENV_PROXY=1 npx tsx scripts/paper-e2e.ts            # 对冲侧真实 P
 
 Polymarket 电竞市场开赛时清空订单簿（`clearBookOnStart`），Predict 开赛后有吃单延迟。停止挂单时间取“开赛前 `stopQuotingBeforeStartSec` 秒”与 `stopQuotingAt` 的较早者，开赛时间取两边较早者；到时间撤单，敞口照常处理。
 
+## 网页控制台
+
+`run` 启动后打开 `http://127.0.0.1:8787/`（端口见 `statusServer.port`）。所有时间为北京时间。
+
+**能看什么**：两边前 5 档盘口及延迟、订单、实际成交（撮合份额、净到账份额、手续费及是否估算）、各平台持仓（计入敞口/已结算/待结算）、净敞口与含在途补单的预计敞口、裸仓时长、补单耗时、费用、费后盈亏（已对冲部分锁定盈亏、未对冲部分成本）、最近报价及不挂单原因、余额、连接状态、平台阻断、告警、补单统计（24 小时 / 7 天 / 30 天 / 全部）、操作记录。
+
+**能做什么**（需要控制口令）：
+
+| 操作 | 说明 |
+| --- | --- |
+| 停止全部新挂单 / 解除 | 撤掉所有挂单并停止新挂单；已有敞口照常补单，对账与风控继续运行。立即生效，重启后保持 |
+| 暂停 / 恢复配对 | 只影响该配对的挂单；暂停原因写入操作记录 |
+| 修改参数 | 全局或单个配对的策略与风控参数（价格模式、价格、数量、最低利润、停止挂单时间、补单参数、各项限额……），显示每项的生效值与来源，修改前确认差异，立即生效 |
+| 修改挂单方向 | 挂单平台与队伍；要求该配对没有未结束订单和敞口（先暂停，等挂单撤完） |
+| 新增配对 | 输入 Predict 市场 ID 与 Polymarket conditionId → 先核对（检查项、结算情形、规则原文）→ 选方向与参数 → 添加。也可“发现候选配对”后一键添加。默认添加后先暂停 |
+| 审阅并批准 | 待审核配对：查看检查项、结算情形矩阵、规则条款对比与两边规则原文，填写理由后批准 |
+| 重新核对 / 对账 / 确认持仓基线 | 立即重新拉取两边规则与赛程；立即对账；持仓与台账不一致且核实来源后，把差额记为基线 |
+| 删除 / 恢复配对 | 历史订单、成交与统计保留 |
+
+**安全边界**：
+
+- 控制操作必须带 `CONSOLE_TOKEN`（只从请求头读取，不放在网址里）；没设置时控制台只读。实盘模式下口令至少 16 个字符，否则也只读。生成口令：`openssl rand -hex 24`。
+- `STATUS_TOKEN`（可选）：设置后查看状态也需要口令（只读口令或控制口令都可以）。
+- 默认只监听 `127.0.0.1`。在云服务器上用 SSH 隧道访问，不要对公网开放端口：
+  `ssh -N -L 8787:127.0.0.1:8787 ubuntu@<服务器IP>`，然后在本地浏览器打开 `http://127.0.0.1:8787/`。
+  如果改成监听其他地址，必须设置 `STATUS_TOKEN`（否则控制台不启动），并且 HTTP 是明文，应放在 TLS 反向代理之后；用域名访问时把域名加到 `statusServer.allowedHosts`。
+- 同一来源连续输错口令 20 次锁定 10 分钟；只认 localhost / IP / `allowedHosts` 的 Host 头（防 DNS 重绑定）；拒绝跨站与非 JSON 的控制请求；页面禁止被嵌入，脚本只允许同源文件；外部文本（队名、规则原文）一律按纯文本显示。
+- 控制台不能绕过配对核对门禁：只能批准“待审核”的配对，“未通过”的不能批准也不能添加；批准绑定审阅时看到的规则版本，批准前会用最新数据再核对一次，规则、队伍或赛程变化就拒绝；之后规则再变化会自动退回待审核并停止挂单。
+- 删除配对前必须没有未结束订单（挂单或在途补单）、没有超过零头的净敞口、没有待结算成交、不在紧急处理中。
+- 修改补单触发标准（`hedgeTrigger`）会改变敞口口径，同样要求相关配对空闲。
+
+**持久化与生效顺序**：控制台的修改（暂停、参数、方向、新增/删除配对）保存在数据库（`data/live.db` 或 `data/sim.db`），重启后仍然有效。生效顺序为：默认值 → `config.yaml` → 控制台全局 → `pairs.yaml` 配对 → 控制台配对；修改配置文件不会覆盖控制台的修改，需要以配置文件为准时在参数表里勾选“恢复”或点“清除全部控制台覆盖”。保存的数据无法解析时（例如升级后字段改名）：该配对按配置加载但暂停挂单、全局参数无法解析则停止新挂单，并告警。
+
+**操作记录**：每次控制操作（包括被拒绝的）记录时间、操作人（登录时填写的名字）、来源 IP、参数与结果，在“操作记录”页查看；命令行的 `pairs approve`、`resume` 也会记录。
+
+**实盘新增配对**：Polymarket 成交推送的订阅在连接时确定，新增配对后会重连一次成交推送，期间所有配对的挂单按断线流程暂停，恢复后先对账（REST 补拉成交）再挂单。
+
 ## 状态与日志
 
-- 状态页 `http://127.0.0.1:8787/`（JSON：`/api/status`），所有时间为北京时间：两边前 5 档盘口及延迟、订单、实际成交（撮合份额、净到账份额、手续费及是否估算）、各平台持仓（计入敞口/已结算/待结算）、净敞口与含在途补单的预计敞口、裸仓时长、补单耗时（每次敞口从出现到对齐）、费用、费后盈亏（已对冲部分锁定盈亏、未对冲部分成本）、最近报价及不挂单原因、余额、平台阻断、告警。
+- 网页控制台见上一节；JSON 接口 `/api/status`（`node dist/cli.js status`）。
 - 日志为 JSON 行，时间为 `+08:00` 北京时间；私钥、API Key、密钥、口令、JWT、签名按字段名与值双重脱敏。
 - 告警写入数据库，可选推送到 `ALERT_WEBHOOK_URL`。
 
@@ -148,12 +186,12 @@ Polymarket 电竞市场开赛时清空订单簿（`clearBookOnStart`），Predic
 两家平台都在 AWS 上（官方文档）：Polymarket 主服务器 `eu-west-2`（伦敦），文档列出的最近非受限地区为 `eu-west-1`（爱尔兰）；Predict 服务器在 `ap-northeast-1`（东京）。英国在 Polymarket“前端与 API 都只能平仓”名单中；爱尔兰、日本在“只在网页只平仓、API 不受限”名单中（帮助中心另有说法，实盘前需向平台确认账户资格）。
 
 - `node dist/cli.js check`：调用 Polymarket 官方地理限制接口检查本机出口 IP；实盘启动时同样检查，被限制则阻断 Polymarket 交易。Predict 没有公开的检查接口，受限地区下单返回 403，机器人会阻断该平台并告警。
-- `node dist/cli.js stats --hours 24`：按配对输出第一腿成交 → 第二腿成交的总耗时（交易所口径与本机口径的均值/P50/P95/最大值）、分段耗时（成交通知、决策、补单执行）、补单失败率、补单部分成交数、需紧急处理比例、每份滑点（实际补单含费成本 − 挂单时预期）。加 `--samples` 逐笔列出，`--json` 输出原始数据，`--db live|sim` 选择数据库。状态页也显示近 7 天统计。
+- `node dist/cli.js stats --hours 24`：按配对输出第一腿成交 → 第二腿成交的总耗时（交易所口径与本机口径的均值/P50/P95/最大值）、分段耗时（成交通知、决策、补单执行）、补单失败率、补单部分成交数、需紧急处理比例、每份滑点（实际补单含费成本 − 挂单时预期）。加 `--samples` 逐笔列出，`--json` 输出原始数据，`--db live|sim` 选择数据库。网页控制台“补单统计”页可按 24 小时 / 7 天 / 30 天 / 全部查看。
 - 两地用同一配置、同一交易方向、相近时段各跑一轮，比较 P95、失败率与滑点。Polymarket 的 `match_time` 只有秒级精度，交易所口径以毫秒推送时间为准，比较时优先看本机口径与分段耗时。
 
 ## 已验证 / 需要真实账户小额实测
 
-**已验证（无需凭证）**：定价与两边手续费公式（对照官方费率表）、订单簿维护（真实 WebSocket 与 REST 逐档一致）、配对核对与规则矩阵（真实接口与真实规则原文）、全部故障场景（模拟交易所驱动真实引擎）、实盘适配器的推送映射（文档格式消息）、端到端模拟（对冲侧真实 Polymarket 深度与费率）、启动/状态页/优雅退出、Predict 订单构建与签名（离线）、两家 SDK 类型检查。详见 [docs/TEST_RESULTS.md](docs/TEST_RESULTS.md)。
+**已验证（无需凭证）**：定价与两边手续费公式（对照官方费率表）、订单簿维护（真实 WebSocket 与 REST 逐档一致）、配对核对与规则矩阵（真实接口与真实规则原文）、全部故障场景（模拟交易所驱动真实引擎）、实盘适配器的推送映射（文档格式消息）、端到端模拟（对冲侧真实 Polymarket 深度与费率）、启动/控制台/优雅退出、网页控制台的鉴权与控制操作（自动化测试 + 无头浏览器实际操作）、Predict 订单构建与签名（离线）、两家 SDK 类型检查。详见 [docs/TEST_RESULTS.md](docs/TEST_RESULTS.md)。
 
 **需要真实账户小额实测**（建议每项 5~10 份、最低利润调高、单场上限调低）：
 
@@ -167,6 +205,7 @@ Polymarket 电竞市场开赛时清空订单簿（`clearBookOnStart`），Predic
 8. 撤单、超时查单、重启对账、持仓接口与台账一致性。
 9. Polymarket 开赛清簿时的撤单推送；2026-12-01 起电竞新市场使用 Protocol V2（`positionIds`、ExchangeV3 授权）。
 10. USDT 与 pUSD 的出入金与换算成本（配置 `strategy.fxBufferBps`）。
+11. 控制台实盘新增配对后，Polymarket 成交推送重连并带上新市场的订阅（本环境无法访问官方文档核实“连接后追加订阅”，所以用重连方式；若实测确认追加订阅有效，可改为不重连）。
 
 ## 目录结构
 
@@ -181,9 +220,10 @@ src/
   pairing/                      规则条款、核对、配对服务
   engine/                       配对引擎、台账、风控、对账、事件路由、告警
   venues/                       交易接口：polymarket/live.ts、predict/live.ts、sim/simVenue.ts
-  monitor/                      状态页
-test/                           定价、配对、故障场景测试
-scripts/                        真实行情核对、端到端模拟、Predict 签名离线检查
+  console/                      网页控制台：HTTP 服务（鉴权与防护）、控制操作、覆盖项持久化、静态页面
+  monitor/                      状态数据与补单统计
+test/                           定价、配对、故障场景、控制台测试
+scripts/                        真实行情核对、端到端模拟、Predict 签名离线检查、控制台离线演示
 docs/                           官方接口核实清单、测试结果
 config/                         配置示例
 ```

@@ -195,6 +195,7 @@ export class PairingService {
     const p = this.get(id);
     if (!p?.def) throw new Error(`配对 ${id} 没有可用定义`);
     const r = await this.verifyMarkets(p.def.predict.marketId, p.def.polymarket.conditionId);
+    r.pairId = id; // 配置里可以自定义配对 ID，保存回同一条记录
     const changed = p.rulesHash !== r.verification.rulesHash;
     const saved = this.save(r);
     if (changed) this.log.warn({ pair: id, from: p.rulesHash?.slice(0, 12), to: r.verification.rulesHash.slice(0, 12), status: saved.status }, "配对信息变化");

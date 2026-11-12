@@ -8,10 +8,13 @@ dataDir: ./data            # SQLite 数据库目录（模拟与实盘分开：si
 logLevel: info
 logFile: null              # 例如 ./logs/bot.log；为空则输出到标准输出
 
+# 网页控制台（状态 + 控制）。控制操作需要环境变量 CONSOLE_TOKEN，未设置时只读。
+# 建议保持只监听本机，远程用 SSH 隧道访问：ssh -N -L 8787:127.0.0.1:8787 ubuntu@<服务器IP>
 statusServer:
   enabled: true
-  host: 127.0.0.1          # 只监听本机；如需远程访问请配合 STATUS_TOKEN 与反向代理
+  host: 127.0.0.1          # 改成其他地址时必须设置 STATUS_TOKEN，且应放在 TLS 反向代理之后
   port: 8787
+  allowedHosts: []         # 用域名访问时把域名加进来（防 DNS 重绑定）；localhost 与 IP 直连总是允许
 
 predict:
   network: mainnet         # mainnet 需要 PREDICT_API_KEY；testnet 不需要（测试网只有测试数据）
