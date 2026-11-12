@@ -3,7 +3,7 @@
 运行环境：Node.js 24.22.2；测试框架 vitest 3.2.7；运行时间 2026-11-12（北京时间）。
 
 ```bash
-npm test            # 51 项全部通过：Test Files 3 passed (3)，Tests 51 passed (51)
+npm test            # 58 项全部通过：Test Files 4 passed (4)，Tests 58 passed (58)
 npm run typecheck   # 通过（含对两家官方 SDK 类型的检查）
 ```
 
@@ -62,7 +62,19 @@ npm run typecheck   # 通过（含对两家官方 SDK 类型的检查）
 | 两边一致自动批准并记录 token 对应；结果顺序相反时交叉对应 | 通过 |
 | 盘口类型不同、conditionId 不在声明列表、赛制不同、已开赛、队伍无法对应 → 拒绝 | 通过 |
 
-## 4. 真实公开行情核对（不需要凭证，`scripts/live-data-check.ts`）
+## 4. 实盘适配器的推送映射（`test/adapters.test.ts`，离线喂入文档格式的推送）
+
+| 用例 | 结果 |
+| --- | --- |
+| Polymarket 自己做 maker：只取 `maker_orders` 中本账户条目的 `matched_amount`（18 份），不把对手 taker 的 48 份算进来 | 通过 |
+| Polymarket 缺少 `trader_side` 且吃单订单不是本进程下的：不记 taker 成交 | 通过 |
+| Polymarket 自己是 taker：MATCHED/MINED/CONFIRMED 同一去重键，CONFIRMED→结算成功，FAILED→结算失败 | 通过 |
+| Polymarket 订单事件：部分成交与撤单映射 | 通过 |
+| Predict 钱包事件：撮合 → 结算成功（份额手续费）同一去重键；心跳原样回显 | 通过 |
+| Predict：post-only 被拒、市价单撮合计划、结算失败 | 通过 |
+| Predict 数量按 SDK 规则保留 5 位有效数字 | 通过 |
+
+## 5. 真实公开行情核对（不需要凭证，`scripts/live-data-check.ts`）
 
 2026-11-12 运行结果（Polymarket 主网公开接口 + Predict 测试网公开接口）：
 
@@ -77,7 +89,7 @@ npm run typecheck   # 通过（含对两家官方 SDK 类型的检查）
 - 发现并修正了一个真实问题：Yes/No 盘“取消判 No”原先被误算为合计 0，改为比较两边兑付向量后判为一致（已加测试）。
 - 实测 Predict 的 `providerTeamId` 等于 Polymarket 事件队伍的 `id`，已作为强匹配依据。
 
-## 5. 端到端模拟交易（`scripts/paper-e2e.ts`）
+## 6. 端到端模拟交易（`scripts/paper-e2e.ts`）
 
 对冲侧为**真实** Polymarket 盘口（真实 WebSocket 行情、按真实深度逐档成交、按真实费率计费）；Predict 挂单侧盘口为**合成数据**（没有 Predict 主网 API Key），用于驱动挂单与模拟成交。
 
@@ -90,17 +102,17 @@ npm run typecheck   # 通过（含对两家官方 SDK 类型的检查）
 | 到停止挂单时间 | 撤挂单；不会再有成交，在 Predict 卖回 3 份残余，净敞口 0 |
 | 汇总 | 已对冲 25 对，两腿净花费 24.53，费用 0.28，锁定费后盈亏 +0.47 |
 
-## 6. 启动冒烟测试
+## 7. 启动冒烟测试
 
 `node dist/cli.js run`（模拟模式、Predict 测试网、Polymarket 主网行情）：行情连接正常；配对核对门禁生效（已结算市场被拒绝，引擎不挂单并在状态页给出原因）；状态页 `/api/status` 与网页可访问（北京时间）；SIGTERM 后先撤挂单再退出。
 
-## 7. 实盘下单路径的离线检查（`scripts/predict-sign-check.ts`）
+## 8. 实盘下单路径的离线检查（`scripts/predict-sign-check.ts`）
 
 用一次性随机钱包构建并签名 Predict 订单（不发送任何请求）：
 - 限价 0.46 × 50 → makerAmount 23 USDT、takerAmount 50 份、post-only、maker = 签名钱包；
 - 市价买“净到账 18 份”→ 毛份额 18.346（扣份额手续费），滑点 192bps，签名后的最高均价恰为上限 0.53。
 
-## 8. 未能在本环境验证的部分
+## 9. 未能在本环境验证的部分
 
 - **Predict 主网行情与交易**：需要 `PREDICT_API_KEY`（本次未提供），主网电竞盘口、主网 WebSocket、钱包事件未实测。
 - **两边真实下单、撤单、查单、成交推送、手续费实收**：需要交易凭证与资金，见 README“需要小额实测”清单。

@@ -247,9 +247,10 @@ export class PolymarketLiveVenue implements TradingVenue {
     let signed: SignedOrderLike;
     if (req.side === "BUY") {
       // FAK 买单以金额为目标：按当前簿逐档算出买 shares 份所需金额，并以 maxPrice 限价
-      const amount = req.amountUsd ?? fx(0);
+      // 金额按分向上取整（多买的部分不足 0.04 份，属于零头）
+      const amount = roundToStep(req.amountUsd ?? fx(0), fx("0.01"), "ceil");
       if (amount <= 0n) throw new VenueError("FAK 买单金额为 0", "MIN_SIZE");
-      signed = await this.c().createMarketOrder({ assetId: req.tokenId, side: OrderSide.BUY, amount: toStr(amount, 6), maxPrice: toStr(req.limitPrice, 6), orderType: OrderType.FAK });
+      signed = await this.c().createMarketOrder({ assetId: req.tokenId, side: OrderSide.BUY, amount: toStr(amount, 2), maxPrice: toStr(req.limitPrice, 6), orderType: OrderType.FAK });
     } else {
       const shares = roundToStep(req.shares, req.meta.shareStep, "floor");
       signed = await this.c().createMarketOrder({ assetId: req.tokenId, side: OrderSide.SELL, shares: toStr(shares, 2), minPrice: toStr(req.limitPrice, 6), orderType: OrderType.FAK });
@@ -408,7 +409,10 @@ export class PolymarketLiveVenue implements TradingVenue {
     const owner = String(get("owner", "owner") ?? "");
     const traderSide = String(get("traderSide", "trader_side") ?? "");
     const takerOrderId = String(get("takerOrderId", "taker_order_id") ?? "");
-    if (owner === this.apiKey && (traderSide === "TAKER" || traderSide === "")) {
+    // 只有明确是 TAKER，或缺少 trader_side 但吃单订单确属本进程下单时，才记 taker 成交；
+    // 自己做 maker 的成交只从 makerOrders 中本账户条目统计，避免把对手的 taker 数量算到自己头上
+    const isOurTaker = traderSide === "TAKER" ? owner === this.apiKey || this.known.has(takerOrderId) : traderSide === "" && this.known.has(takerOrderId);
+    if (isOurTaker) {
       const side: Side = String(get("side", "side")).toUpperCase() === "SELL" ? "SELL" : "BUY";
       out.push({
         key: `pm:${tradeId}:${takerOrderId}`,

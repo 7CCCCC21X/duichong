@@ -37,7 +37,7 @@ npm run build
 cp config/config.example.yaml config/config.yaml
 cp config/pairs.example.yaml  config/pairs.yaml
 cp .env.example .env          # 填密钥；模拟模式可以先不填
-npm test                      # 51 项测试
+npm test                      # 58 项测试
 ```
 
 机器需要经 HTTP 代理访问外网时，启动前设置 `NODE_USE_ENV_PROXY=1`（让 Node 的 fetch 使用 `HTTPS_PROXY`），WebSocket 会自动走代理。
@@ -145,7 +145,7 @@ Polymarket 电竞市场开赛时清空订单簿（`clearBookOnStart`），Predic
 
 ## 已验证 / 需要真实账户小额实测
 
-**已验证（无需凭证）**：定价与两边手续费公式（对照官方费率表）、订单簿维护（真实 WebSocket 与 REST 逐档一致）、配对核对与规则矩阵（真实接口与真实规则原文）、全部故障场景（模拟交易所驱动真实引擎）、端到端模拟（对冲侧真实 Polymarket 深度与费率）、启动/状态页/优雅退出、Predict 订单构建与签名（离线）、两家 SDK 类型检查。详见 [docs/TEST_RESULTS.md](docs/TEST_RESULTS.md)。
+**已验证（无需凭证）**：定价与两边手续费公式（对照官方费率表）、订单簿维护（真实 WebSocket 与 REST 逐档一致）、配对核对与规则矩阵（真实接口与真实规则原文）、全部故障场景（模拟交易所驱动真实引擎）、实盘适配器的推送映射（文档格式消息）、端到端模拟（对冲侧真实 Polymarket 深度与费率）、启动/状态页/优雅退出、Predict 订单构建与签名（离线）、两家 SDK 类型检查。详见 [docs/TEST_RESULTS.md](docs/TEST_RESULTS.md)。
 
 **需要真实账户小额实测**（建议每项 5~10 份、最低利润调高、单场上限调低）：
 
