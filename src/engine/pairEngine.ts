@@ -467,8 +467,10 @@ export class PairEngine {
   private async handleResidual(pos: Positions, excess: Outcome, qty: Fx, ctx: OrderCtx[], now: number): Promise<void> {
     const s = this.pair.strategy;
     if (this.residualSince === null) this.residualSince = now;
+    // 仍在挂单（或允许继续挂单、只是正在撤换报价）时，后续成交可能把残余凑够最小单，先等待
     const makerLive = ctx.some((c) => c.order.role === "MAKER" && !isTerminalOrder(c.order.status));
-    if (makerLive && now - this.residualSince < s.residual.maxWaitSec * 1000) {
+    const quotingExpected = this.quoteBlocker(now) === null;
+    if ((makerLive || quotingExpected) && now - this.residualSince < s.residual.maxWaitSec * 1000) {
       this.setMode("RESIDUAL_WAIT", `残余 ${toStr(qty, 4)} 份低于最小单，等待更多成交`);
       return;
     }

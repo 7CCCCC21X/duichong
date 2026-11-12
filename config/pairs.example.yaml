@@ -1,0 +1,43 @@
+# 复制为 config/pairs.yaml 后修改。
+# 先用 `node dist/cli.js pairs discover` 或 `pairs verify <predictMarketId> <conditionId>` 核对，
+# 只有核对结果为 APPROVED（或人工 approve 过且规则未变）的配对才会挂单。
+#
+# 结果 A / B 的定义：A = Predict 市场 indexSet=1 对应的队伍，B = indexSet=2 对应的队伍；
+# Polymarket 一侧按队伍自动对应（顺序可能相反），核对结果里会列出两边的 token。
+
+pairs:
+  - id: cs2-havu-boyband-ml
+    enabled: true
+    note: "示例：Counter-Strike HAVU vs BoyBand (BO3) 整场胜负"
+    predict:
+      marketId: 123456                 # Predict 市场 ID（整场胜负盘）
+    polymarket:
+      conditionId: "0xbf35e26668dfc985091d8745bb90bc93b51208f064a073a973942762de97c484"
+    # 挂单平台与方向：在 Predict 挂买 HAVU，成交后在 Polymarket 买 BoyBand 对冲
+    maker:
+      venue: predict                   # predict 或 polymarket（每个配对同时只启用一边）
+      team: HAVU                       # 或写 outcome: A / B
+    strategy:
+      priceMode: fixed
+      price: 0.46
+      sizeShares: 50
+      minProfitPerShare: 0.01
+      stopQuotingBeforeStartSec: 900
+    risk:
+      maxMatchUsd: 300
+      maxUnhedgedShares: 60
+
+  # 反方向示例：在 Polymarket 挂单、在 Predict 补单
+  - id: cs2-havu-boyband-ml-pm-maker
+    enabled: false
+    predict:
+      marketId: 123456
+    polymarket:
+      conditionId: "0xbf35e26668dfc985091d8745bb90bc93b51208f064a073a973942762de97c484"
+    maker:
+      venue: polymarket
+      outcome: B
+    strategy:
+      priceMode: auto
+      sizeShares: 30
+      minProfitPerShare: 0.015

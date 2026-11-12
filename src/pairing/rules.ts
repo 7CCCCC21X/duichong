@@ -119,87 +119,96 @@ export type ScenarioVerdict = "consistent" | "mismatch" | "unknown";
 export interface ScenarioResult {
   id: string;
   label: string;
-  /** Predict 腿（买入结果 X）的兑付 */
+  /** Predict 市场在该情形下对 [A, B] 的兑付 */
   predictLeg: string;
-  /** Polymarket 腿（买入另一结果）的兑付 */
+  /** Polymarket 市场在该情形下对 [A, B] 的兑付 */
   polymarketLeg: string;
+  /** 互补组合“Predict 买 A + Polymarket 买 B”与“Predict 买 B + Polymarket 买 A”的合计兑付 */
   total: string;
   verdict: ScenarioVerdict;
   note?: string;
 }
 
-function legPayout(p: Payout, legWins: boolean | null): number | null {
+type Vec = [number, number] | null;
+
+/**
+ * 某条款在某情形下对结果 [A, B] 的兑付向量。
+ * winner：winnerIsA 指定谁赢；no：标签为 No 的结果得 1（Yes/No 盘）；50-50：各 0.5。
+ */
+function vec(p: Payout, winnerIsA: boolean | null, labels: { A: string; B: string }): Vec {
   switch (p) {
     case "50-50":
-      return 0.5;
+      return [0.5, 0.5];
     case "winner":
     case "result":
-      return legWins === null ? null : legWins ? 1 : 0;
-    case "no":
-      return 0;
+      return winnerIsA === null ? null : winnerIsA ? [1, 0] : [0, 1];
+    case "no": {
+      const a = labels.A.trim().toLowerCase();
+      const b = labels.B.trim().toLowerCase();
+      if (b === "no" || a === "yes") return [0, 1];
+      if (a === "no" || b === "yes") return [1, 0];
+      return null;
+    }
     default:
       return null;
   }
 }
 
+const fmt = (v: Vec) => (v ? `A ${v[0]} / B ${v[1]}` : "未写明");
+
 /**
- * 结算情形矩阵：Predict 腿买结果 X，Polymarket 腿买另一结果。
- * 每种情形下两腿合计兑付应为 1（对冲成立）；不同则为 mismatch，无法判定则为 unknown。
+ * 结算情形矩阵：逐个情形求两边市场对 [A, B] 的兑付向量。
+ * 两边向量相同 ⇔ 任意互补组合（Predict 买 X + Polymarket 买另一结果）合计兑付都为 1。
  */
-export function settlementMatrix(pf: RuleClauses, pm: RuleClauses, opts: { tiePossible: boolean; identicalText: boolean }): ScenarioResult[] {
+export function settlementMatrix(
+  pf: RuleClauses,
+  pm: RuleClauses,
+  opts: { tiePossible: boolean; identicalText: boolean; labels?: { A: string; B: string } },
+): ScenarioResult[] {
+  const labels = opts.labels ?? { A: "A", B: "B" };
   const out: ScenarioResult[] = [];
-  const add = (id: string, label: string, a: number | null, b: number | null, note?: string) => {
+  const add = (id: string, label: string, a: Vec, b: Vec, note?: string) => {
     let verdict: ScenarioVerdict;
     if (a === null || b === null) verdict = opts.identicalText ? "consistent" : "unknown";
-    else verdict = Math.abs(a + b - 1) < 1e-9 ? "consistent" : "mismatch";
+    else verdict = Math.abs(a[0] - b[0]) < 1e-9 && Math.abs(a[1] - b[1]) < 1e-9 ? "consistent" : "mismatch";
+    const total = a && b ? `${a[0] + b[1]} / ${a[1] + b[0]}` : "-";
     out.push({
       id,
       label,
-      predictLeg: a === null ? "未写明" : String(a),
-      polymarketLeg: b === null ? "未写明" : String(b),
-      total: a === null || b === null ? "-" : String(a + b),
+      predictLeg: fmt(a),
+      polymarketLeg: fmt(b),
+      total,
       verdict,
       note: a === null || b === null ? (opts.identicalText ? "两边规则原文一致，按同一方式结算" : note) : note,
     });
   };
-  add("x-wins", "X 正常获胜", 1, 0);
-  add("y-wins", "对手正常获胜", 0, 1);
-  add("cancelled", "比赛取消（未开打）", legPayout(pf.cancelled, null), legPayout(pm.cancelled, null));
-  if (opts.tiePossible) add("tie", "平局", legPayout(pf.tie, null), legPayout(pm.tie, null));
-  // 延期
+  add("a-wins", `${labels.A} 正常获胜`, [1, 0], [1, 0]);
+  add("b-wins", `${labels.B} 正常获胜`, [0, 1], [0, 1]);
+  add("cancelled", "比赛取消（未开打）", vec(pf.cancelled, null, labels), vec(pm.cancelled, null, labels));
+  if (opts.tiePossible) add("tie", "平局", vec(pf.tie, null, labels), vec(pm.tie, null, labels));
   const wPf = pf.postponeWindowHours;
   const wPm = pm.postponeWindowHours;
   if (wPf !== null && wPm !== null) {
-    add("postponed-within", `延期且在两边窗口内（≤${Math.min(wPf, wPm)}h）`, 1, 0, "按实际赛果");
+    add("postponed-within", `延期且在两边窗口内（≤${Math.min(wPf, wPm)}h），按赛果`, [1, 0], [1, 0], "按实际赛果");
     if (wPf !== wPm) {
-      const short = wPf < wPm ? "predict" : "polymarket";
-      // 延期时长落在两窗口之间：短窗口一方 50-50，另一方按赛果
-      for (const xWins of [true, false]) {
-        const a = short === "predict" ? legPayout(pf.postponedBeyond, null) : xWins ? 1 : 0;
-        const b = short === "polymarket" ? legPayout(pm.postponedBeyond, null) : xWins ? 0 : 1;
-        add(
-          `postponed-between-${xWins ? "x" : "y"}`,
-          `延期 ${Math.min(wPf, wPm)}h~${Math.max(wPf, wPm)}h 且${xWins ? " X 获胜" : "对手获胜"}`,
-          a,
-          b,
-          `两边延期窗口不同（Predict ${wPf}h，Polymarket ${wPm}h）`,
-        );
+      const pfShort = wPf < wPm;
+      for (const aWins of [true, false]) {
+        const played: Vec = aWins ? [1, 0] : [0, 1];
+        const a = pfShort ? vec(pf.postponedBeyond, null, labels) : played;
+        const b = pfShort ? played : vec(pm.postponedBeyond, null, labels);
+        add(`postponed-between-${aWins ? "a" : "b"}`, `延期 ${Math.min(wPf, wPm)}h~${Math.max(wPf, wPm)}h 且${aWins ? labels.A : labels.B}获胜`, a, b, `两边延期窗口不同（Predict ${wPf}h，Polymarket ${wPm}h）`);
       }
     }
-    add("postponed-beyond", `延期超过两边窗口（>${Math.max(wPf, wPm)}h）`, legPayout(pf.postponedBeyond, null), legPayout(pm.postponedBeyond, null));
+    add("postponed-beyond", `延期超过两边窗口（>${Math.max(wPf, wPm)}h）`, vec(pf.postponedBeyond, null, labels), vec(pm.postponedBeyond, null, labels));
+  } else if (wPf !== null || wPm !== null) {
+    add("postponed", "延期", null, null, `只有一边写明延期窗口（Predict ${wPf ?? "-"}h，Polymarket ${wPm ?? "-"}h）`);
   } else {
     add("postponed", "延期", null, null, "未能提取延期窗口");
   }
-  add("forfeit-before", "开赛前弃权/走过场", legPayout(pf.forfeitBeforeStart, null), legPayout(pm.forfeitBeforeStart, null));
-  for (const xWins of [true, false]) {
-    add(
-      `forfeit-after-${xWins ? "x" : "y"}`,
-      `开赛后对手弃权，${xWins ? "X" : "对手"}获胜`,
-      legPayout(pf.forfeitAfterStart, xWins),
-      legPayout(pm.forfeitAfterStart, !xWins),
-    );
+  add("forfeit-before", "开赛前弃权/走过场", vec(pf.forfeitBeforeStart, null, labels), vec(pm.forfeitBeforeStart, null, labels));
+  for (const aWins of [true, false]) {
+    add(`forfeit-after-${aWins ? "a" : "b"}`, `开赛后对手弃权，${aWins ? labels.A : labels.B}获胜`, vec(pf.forfeitAfterStart, aWins, labels), vec(pm.forfeitAfterStart, aWins, labels));
   }
-  add("not-completed", "开赛后未完赛（非弃权）", legPayout(pf.notCompleted, null), legPayout(pm.notCompleted, null));
-  // 规则写“按已完成部分结算”时，两边需各自给出相同的结果
+  add("not-completed", "开赛后未完赛（非弃权）", vec(pf.notCompleted, null, labels), vec(pm.notCompleted, null, labels));
   return out;
 }

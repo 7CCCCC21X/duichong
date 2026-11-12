@@ -168,8 +168,28 @@ describe("规则条款提取", () => {
     const between = m.filter((s) => s.id.startsWith("postponed-between"));
     expect(between).toHaveLength(2);
     expect(between.every((s) => s.verdict === "mismatch")).toBe(true);
-    expect(between.map((s) => s.total).sort()).toEqual(["0.5", "1.5"]);
+    // 延期落在两窗口之间：短窗口一边 50-50、另一边按赛果，互补组合合计为 0.5 或 1.5
+    expect(between.flatMap((s) => s.total.split(" / ")).sort()).toEqual(["0.5", "0.5", "1.5", "1.5"]);
     expect(m.find((s) => s.id === "cancelled")!.verdict).toBe("consistent");
+  });
+});
+
+describe("Yes/No 盘的结算情形", () => {
+  it("两边都写“取消判 No”：Predict 买 Yes + Polymarket 买 No 合计仍为 1（一致）", () => {
+    const yesNo = `If Team Liquid wins the series (wins both games, 2-0), this market will resolve to "Yes". Otherwise, this market will resolve to "No". If the series is canceled entirely, with no make-up, this market will resolve "No".`;
+    const c = extractClauses(yesNo);
+    expect(c.cancelled).toBe("no");
+    const m = settlementMatrix(c, c, { tiePossible: true, identicalText: false, labels: { A: "Yes", B: "No" } });
+    const cancel = m.find((s) => s.id === "cancelled")!;
+    expect(cancel.verdict).toBe("consistent");
+    expect(cancel.total).toBe("1 / 1");
+  });
+
+  it("一边判 No、一边 50-50：不一致", () => {
+    const a = extractClauses(`If the series is canceled entirely, this market will resolve "No".`);
+    const b = extractClauses(`If the match is canceled (not played at all), this market will resolve to 50-50.`);
+    const m = settlementMatrix(a, b, { tiePossible: false, identicalText: false, labels: { A: "Yes", B: "No" } });
+    expect(m.find((s) => s.id === "cancelled")!.verdict).toBe("mismatch");
   });
 });
 
@@ -194,7 +214,7 @@ describe("配对核对（落实到具体子盘口）", () => {
   it("规则延期窗口不同：进入待审核，列出不一致情形", () => {
     const { verification } = verifyPair({ pf: pfMarket({ description: PF_RULES_7D }), cat: pfCat(), pm: pmMarket(), now: NOW });
     expect(verification.status).toBe("PENDING_REVIEW");
-    expect(verification.reasons.join("")).toContain("合计 0.5");
+    expect(verification.reasons.join("")).toContain("0.5");
   });
 
   it("盘口类型不同（单局 vs 整场）：拒绝", () => {

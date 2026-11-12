@@ -1,0 +1,85 @@
+# 复制为 config/config.yaml 后修改。密钥一律放在 .env（见 .env.example），不要写在这里。
+
+# simulation：真实公开行情 + 模拟成交（默认）
+# live：真实下单，必须同时在 .env 里设置 LIVE_TRADING=true
+mode: simulation
+
+dataDir: ./data            # SQLite 数据库目录（模拟与实盘分开：sim.db / live.db）
+logLevel: info
+logFile: null              # 例如 ./logs/bot.log；为空则输出到标准输出
+
+statusServer:
+  enabled: true
+  host: 127.0.0.1          # 只监听本机；如需远程访问请配合 STATUS_TOKEN 与反向代理
+  port: 8787
+
+predict:
+  network: mainnet         # mainnet 需要 PREDICT_API_KEY；testnet 不需要（测试网只有测试数据）
+  pollIntervalMs: 2000     # 没有 WebSocket 时 REST 轮询订单簿的间隔
+  makerOrderTtlSec: 900    # Predict 挂单有效期（进程失联兜底），0 表示不过期
+  makerRefreshBeforeSec: 180
+  selfTradePrevention: CANCEL_TAKER
+  jwtRefreshBeforeExpirySec: 3600
+  requestTimeoutMs: 10000
+
+polymarket:
+  orderHeartbeat: true     # 实盘：进程失联 10 秒后交易所自动撤掉本 API Key 的全部挂单
+  minOrderMode: shares     # 文档矛盾，实测后可改为 usd 或 both
+  bookResyncSec: 30
+  requestTimeoutMs: 10000
+
+# 全局策略默认值（每个配对可在 pairs.yaml 中覆盖）
+strategy:
+  hedgeTrigger: matched           # matched=已撮合即补单；settled=结算成功后才补单
+  priceMode: auto                 # fixed=固定价；auto=买一加 improveTicks 且不超过盈利上限；max=盈利上限价
+  price: null                     # fixed 模式下的挂单价格
+  improveTicks: 1
+  minMakerPrice: 0.02
+  maxMakerPrice: 0.98
+  sizeShares: 50                  # 目标挂单份额
+  minProfitPerShare: 0.01         # 每对（1 份挂单 + 1 份对冲）最低费后利润
+  hedgeSlippage: 0.005            # 对冲价格滑点缓冲（价格单位）
+  riskBufferPerShare: 0.002       # 风险缓冲（每份美元）
+  fxBufferBps: 20                 # USDT 与 pUSD 结算资产换算缓冲
+  stopQuotingBeforeStartSec: 900  # 开赛前 15 分钟停止挂单（Polymarket 电竞开赛清簿）
+  stopQuotingAt: null             # 也可写绝对时间，如 "2026-11-12T10:00:00+08:00"
+  requoteMinIntervalMs: 1500
+  requoteMinTicks: 1
+  maxBookAgeMs: 15000             # 订单簿超过该时长未更新视为断连，撤挂单
+  emergencyCooldownSec: 300
+  hedge:
+    minProfitPerShare: 0          # 正常补单可接受的每份最低利润（负数表示允许小亏完成对冲）
+    retryIntervalMs: 1500
+    maxNormalAttempts: 5
+    fillGraceMs: 8000
+    requestTimeoutMs: 10000
+    coalesceMs: 100               # 成交合并窗口
+  residual:
+    dustShares: 0.2               # 不处理的零头
+    maxWaitSec: 30                # 残余低于最小单时等待更多成交的时间
+
+risk:
+  maxOrderShares: 500
+  maxOrderUsd: 300
+  maxMatchUsd: 1000               # 单场资金上限（持仓 + 挂单占用 + 补单预留）
+  maxGlobalUsd: 5000              # 全局资金上限
+  maxUnhedgedShares: 100          # 单配对最大未对冲份额
+  maxUnhedgedSharesGlobal: 200
+  maxNakedSec: 20                 # 最长裸仓时间，超过进入紧急处理
+  maxHedgePrice: 0.97             # 补单原始价格硬上限
+  maxLossPerShare: 0.05           # 紧急处理时每份最大允许亏损
+  maxLossPerPairUsd: 20
+  maxDailyLossUsd: 50             # 超过则停止全部新挂单并告警
+  reserveHedgeFunds: true         # 为全部挂单可能成交预留补单资金
+  balanceRefreshSec: 30
+  cancelOrphanOrders: true
+  positionTolerance: 0.05
+
+fx:
+  usdtPerUsd: 1
+  pusdPerUsd: 1
+
+simulation:
+  startingBalanceUsd: 1000
+  latencyMs: 150
+  makerFillRatio: 1               # 真实盘口穿过挂价时按此比例模拟成交

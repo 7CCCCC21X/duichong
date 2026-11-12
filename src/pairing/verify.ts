@@ -129,6 +129,9 @@ function teamKeys(label: string, team: PfTeam | PmTeam | null): { strong: Set<st
     if (team.name) weak.add(`loose:${loose(team.name)}`);
   }
   if (label) {
+    // 大小分盘：“Over 2.5”与“Over”视为同一结果
+    const ou = normName(label).match(/^(over|under)\b/);
+    if (ou) strong.add(`ou:${ou[1]}`);
     strong.add(`name:${normName(label)}`);
     weak.add(`abbr:${normName(label)}`);
     weak.add(`loose:${loose(label)}`);
@@ -191,7 +194,7 @@ export function verifyPair(input: {
   else add("game", "游戏", gPf === gPm ? "pass" : "fail", `Predict ${gPf}，Polymarket ${gPm}`);
 
   // 3) 盘口类型（整场 / 单局 / 让分 / 大小分）
-  const pfType = PM_TYPE[pf.marketType ?? ""] ?? (pf.marketType ? pf.marketType.toLowerCase() : null);
+  const pfType = PM_TYPE[pf.marketType ?? ""] ?? (pf.marketType ? pf.marketType.replace(/^SPORTS_/, "").toLowerCase() : null);
   const pmType = pm.sportsMarketType;
   if (!pfType || !pmType) add("type", "盘口类型", "warn", `Predict ${pf.marketType ?? "未知"}，Polymarket ${pmType ?? "未知"}`);
   else add("type", "盘口类型", pfType === pmType ? "pass" : "fail", `Predict ${pf.marketType}，Polymarket ${pmType}`);
@@ -296,7 +299,7 @@ export function verifyPair(input: {
   const cPm = extractClauses(pmRules);
   const identical = normalizeRules(pfRules) === normalizeRules(pmRules);
   add("rulesText", "规则原文", identical ? "pass" : "warn", identical ? "两边规则原文一致" : "两边规则原文不同，逐条比对");
-  const scenarios = settlementMatrix(cPf, cPm, { tiePossible: (boPf ?? boPm ?? 1) % 2 === 0, identicalText: identical });
+  const scenarios = settlementMatrix(cPf, cPm, { tiePossible: (boPf ?? boPm ?? 1) % 2 === 0, identicalText: identical, labels: def ? def.labels : { A: pf.outcomes[0]?.name ?? "A", B: pf.outcomes[1]?.name ?? "B" } });
   const mism = scenarios.filter((s) => s.verdict === "mismatch");
   const unk = scenarios.filter((s) => s.verdict === "unknown");
   if (mism.length) add("settle", "各结算情形合计兑付", "warn", `不一致：${mism.map((s) => `${s.label}（合计 ${s.total}）`).join("；")}`);

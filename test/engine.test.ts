@@ -425,6 +425,23 @@ describe("断线、过期、深度消失、余额不足、小额残余", () => {
     expect(acts.every((o) => o.venue === "predict")).toBe(true);
   });
 
+  it("残余出现时挂单恰好在撤换（剩余量过少重挂）：仍然等待，不立即平仓", async () => {
+    // 关闭合并窗口，复现“旧挂单已撤、新挂单未下”的空档
+    const h = await ready({ strategy: { hedge: { coalesceMs: 0 } as never } });
+    h.venues.predict.fillMaker(TOK.predict.A, fx(23));
+    await h.settle();
+    await h.tick();
+    expect(h.net()).toBe(0n);
+    expect(toStr(h.activeMakers()[0]!.reportedFilled)).toBe("23");
+    // 再成交 3 份：挂单剩余 24 < 目标的一半，会被撤换重挂；同时出现 3 份残余
+    h.venues.predict.fillMaker(TOK.predict.A, fx(3));
+    await h.settle();
+    await h.tick(1000, 3);
+    expect(toStr(h.net())).toBe("3");
+    expect(h.repo.listOrders({ pairId: "pair1" }).filter((o) => o.role === "UNWIND")).toHaveLength(0);
+    expect(h.engine.currentMode.exposureMode).toBe("RESIDUAL_WAIT");
+  });
+
   it("零头不处理（低于 dust）", async () => {
     const h = await ready();
     h.venues.predict.fillMaker(TOK.predict.A, fx("0.1"));
