@@ -17,9 +17,6 @@ const lim = await v.prepareLimit({ clientOrderId: "c1", tokenId: "53995717619670
 const p = lim.payload as { order: Record<string, unknown>; pricePerShare: string; strategy: string; isPostOnly: boolean };
 console.log("LIMIT hash", lim.hash, "price", toStr(lim.price, 4), "size", toStr(lim.size, 4));
 console.log("  makerAmount(USDT wei)", p.order.makerAmount, "takerAmount(shares wei)", p.order.takerAmount, "pricePerShare", p.pricePerShare, "postOnly", p.isPostOnly, "maker", p.order.maker === w.address);
-// 校验哈希 = EIP-712 TypedDataEncoder.hash
-const td = (await import("@predictdotfun/sdk")).EIP712_DOMAIN;
-void td;
 const mk = await v.prepareTaker({ clientOrderId: "c2", tokenId: "45059303355214266666609536313670329022653576939527554543702090330392185817553", side: "BUY", shares: fx("18"), limitPrice: fx("0.53"), amountUsd: null, meta, bookLevels: [{ price: fx("0.51"), size: fx("10") }, { price: fx("0.52"), size: fx("100") }] });
 const mp = mk.payload as { order: Record<string, unknown>; pricePerShare: string; strategy: string; slippageBps: string };
 console.log("MARKET hash", mk.hash, "strategy", mp.strategy, "slippageBps", mp.slippageBps);
