@@ -257,7 +257,19 @@ export async function refreshBalances(ctx: AppContext): Promise<void> {
       ctx.risk.block(v, "balance-fetch", `余额查询失败：${errMsg(e)}`, ctx.clock.now() + 60_000);
       ctx.log.warn({ venue: v, err: errMsg(e) }, "余额查询失败");
     }
+    syncVenueIssues(ctx, v);
   }
+}
+
+/** 把平台报告的持续性问题（如授权缺失）同步为风控阻断；问题消失后自动解除。 */
+export function syncVenueIssues(ctx: AppContext, v: VenueId): void {
+  const issues = ctx.venues[v].issues?.() ?? [];
+  const codes = new Set(issues.map((i) => `issue:${i.code}`));
+  for (const i of issues) {
+    if (!ctx.risk.venueBlocked(v)) ctx.alerts.raise("critical", i.code.toUpperCase(), `${v}：${i.message}`, { dedupeMs: 600_000 });
+    ctx.risk.block(v, `issue:${i.code}`, i.message);
+  }
+  for (const b of ctx.risk.listBlocks()) if (b.venue === v && b.code.startsWith("issue:") && !codes.has(b.code)) ctx.risk.unblock(v, b.code);
 }
 
 /** 启动机器人主循环。返回停止函数。 */
@@ -290,6 +302,9 @@ export async function runBot(ctx: AppContext): Promise<() => Promise<void>> {
   ctx.pmFeed.start();
   ctx.pfFeed.start();
   await loadPairs(ctx);
+  // Predict 授权检查需要先登记市场类型（是否 negRisk / yield-bearing）
+  const pfVenue = ctx.venues.predict as TradingVenue & { recheckApprovals?: () => Promise<void> };
+  await pfVenue.recheckApprovals?.();
   await refreshBalances(ctx);
   // 等行情首帧
   await new Promise((r) => setTimeout(r, 1500));

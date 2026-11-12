@@ -128,8 +128,19 @@ export class PolymarketLiveVenue implements TradingVenue {
   private apiKey = "";
   /** 本进程下过的订单：orderId(=hash) → tokenId */
   private known = new Map<string, { tokenId: string; side: Side }>();
+  private allowanceIssue: string | null = null;
+  private lastReauth = 0;
 
   constructor(private readonly o: PolymarketLiveOptions) {}
+
+  /** 认证失效时重新创建客户端（限频 30 秒一次）。 */
+  private reauth(): void {
+    if (Date.now() - this.lastReauth < 30_000) return;
+    this.lastReauth = Date.now();
+    void this.connect()
+      .then(() => this.o.log.info("Polymarket 已重新认证"))
+      .catch((e) => this.o.log.error({ err: errMsg(e) }, "Polymarket 重新认证失败"));
+  }
 
   async start(): Promise<void> {
     await this.connect();
@@ -291,6 +302,7 @@ export class PolymarketLiveVenue implements TradingVenue {
       if (e.status === 401 || e.status === 403) {
         this.authOk = false;
         this.lastError = e.message;
+        this.reauth();
         return new VenueError(`认证失败：${e.message}`, "AUTH", null, e);
       }
       if (e.status === 429) return new VenueError(`限流：${e.message}`, "RATE_LIMIT", (e.retryAfter ?? 5) * 1000, e);
@@ -473,7 +485,10 @@ export class PolymarketLiveVenue implements TradingVenue {
       const bal = fromUnits(BigInt(String(r.balance)), 6);
       const allowances = Object.values(r.allowances as Record<string, bigint>);
       if (allowances.length && allowances.every((a) => BigInt(a) === 0n)) {
-        this.o.log.warn("Polymarket pUSD 授权额度为 0，买单将被拒绝");
+        this.allowanceIssue = "pUSD 对交易所的授权额度为 0，买单会被拒绝（可用 SDK setupTradingApprovals 或网页完成授权）";
+        this.o.log.warn(this.allowanceIssue);
+      } else {
+        this.allowanceIssue = null;
       }
       return { collateral: bal, available: bal, updatedAt: Date.now() };
     } catch (e) {
@@ -501,5 +516,9 @@ export class PolymarketLiveVenue implements TradingVenue {
 
   health(): { userStreamUp: boolean; authOk: boolean; lastError: string | null } {
     return { userStreamUp: this.ws?.up ?? false, authOk: this.authOk, lastError: this.lastError };
+  }
+
+  issues(): { code: string; message: string }[] {
+    return this.allowanceIssue ? [{ code: "allowance", message: this.allowanceIssue }] : [];
   }
 }

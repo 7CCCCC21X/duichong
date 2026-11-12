@@ -77,6 +77,7 @@ export class PredictLiveVenue implements TradingVenue {
   private reqId = 1;
   /** 市场参数：marketId → isNegRisk/isYieldBearing/feeRateBps（下单签名需要） */
   private marketParams = new Map<string, { isNegRisk: boolean; isYieldBearing: boolean; feeRateBps: number; marketId: number }>();
+  private approvalIssue: string | null = null;
 
   constructor(private readonly o: PredictLiveOptions) {
     const provider = new ethersCjs.JsonRpcProvider(o.rpcUrl ?? (o.chain === "mainnet" ? "https://bsc-dataseed.bnbchain.org/" : "https://bsc-testnet-dataseed.bnbchain.org/"));
@@ -209,8 +210,10 @@ export class PredictLiveVenue implements TradingVenue {
       const checks = await this.b().checkApprovals(steps);
       const missing = checks.filter((c) => !c.satisfied).map((c) => c.step.label);
       if (missing.length) {
-        this.lastError = `缺少授权：${missing.join("、")}`;
+        this.approvalIssue = `缺少授权：${missing.join("、")}`;
         this.o.log.error({ missing }, "Predict 授权不完整（可用 SDK runApprovals 或网页完成授权）");
+      } else {
+        this.approvalIssue = null;
       }
     } catch (e) {
       this.o.log.warn({ err: errMsg(e) }, "Predict 授权检查失败");
@@ -556,6 +559,15 @@ export class PredictLiveVenue implements TradingVenue {
 
   health(): { userStreamUp: boolean; authOk: boolean; lastError: string | null } {
     return { userStreamUp: this.ws?.up ?? false, authOk: this.authOk, lastError: this.lastError };
+  }
+
+  issues(): { code: string; message: string }[] {
+    return this.approvalIssue ? [{ code: "allowance", message: this.approvalIssue }] : [];
+  }
+
+  /** 由总控在登记市场后定期调用，重新检查授权。 */
+  async recheckApprovals(): Promise<void> {
+    await this.checkApprovals();
   }
 }
 

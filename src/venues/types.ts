@@ -120,4 +120,6 @@ export interface TradingVenue {
   getPositions(tokenIds: string[]): Promise<PositionInfo[]>;
   /** 用户事件流是否在线、认证是否有效 */
   health(): { userStreamUp: boolean; authOk: boolean; lastError: string | null };
+  /** 需要阻断挂单的持续性问题（例如授权缺失），code 相同的问题恢复后会自动解除阻断 */
+  issues?(): { code: string; message: string }[];
 }
