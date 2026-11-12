@@ -28,6 +28,11 @@ export function bjIso(ts: number = Date.now()): string {
 export function parseTime(v: string | number | null | undefined): number | null {
   if (v === null || v === undefined || v === "") return null;
   if (typeof v === "number") return v < 1e12 ? v * 1000 : v;
+  // 纯数字字符串（Polymarket match_time 为秒、timestamp 为毫秒）
+  if (/^\d+(\.\d+)?$/.test(v.trim())) {
+    const n = Number(v);
+    return n < 1e12 ? Math.round(n * 1000) : Math.round(n);
+  }
   // Polymarket 有 "2026-11-11 18:00:00+00" 这种格式
   const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}[+-]\d{2}$/.test(v) ? `${v.replace(" ", "T")}:00` : v;
   const t = Date.parse(normalized);

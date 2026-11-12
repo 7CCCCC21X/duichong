@@ -1141,6 +1141,10 @@ export class PairEngine {
         this.d.risk.block(v, "restarting", `撮合引擎重启：${msg}`, now + (retryAfterMs ?? 5_000));
         this.d.alerts.raise("warn", "ENGINE_RESTART", `${v} 撮合引擎重启中`, { pairId: this.pair.id });
         break;
+      case "FORBIDDEN":
+        this.d.risk.block(v, "forbidden", `地区或账户受限：${msg}`);
+        this.d.alerts.raise("critical", "FORBIDDEN", `${v} 拒绝交易（地区或账户受限），已阻断该平台；请确认部署地区与账户资格：${msg}`, { pairId: this.pair.id });
+        break;
       case "MARKET_CLOSED":
         this.d.alerts.raise("warn", "MARKET_CLOSED", `${v} 市场不接受订单：${msg}`, { pairId: this.pair.id });
         break;

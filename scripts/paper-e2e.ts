@@ -23,6 +23,7 @@ import { BookStore, complementBook } from "../src/market/bookStore.js";
 import { httpJson } from "../src/market/http.js";
 import { parsePmMarket, pmMetaFrom, PolymarketBookFeed, PolymarketPublic } from "../src/market/polymarketData.js";
 import { pairStatusJson } from "../src/monitor/status.js";
+import { computeHedgeStats, statsSummary } from "../src/monitor/stats.js";
 import { SimVenue } from "../src/venues/sim/simVenue.js";
 import { pfMeta } from "../test/harness.js";
 
@@ -152,6 +153,8 @@ console.table((snap.成交 as Record<string, unknown>[]).map((f) => ({ 时间: f
 console.log("=== 持仓", JSON.stringify(snap.持仓));
 console.log("=== 补单耗时", JSON.stringify(snap.补单耗时));
 console.log("=== 告警", JSON.stringify(alerts.recent.map((a) => `${a.level} ${a.code} ${a.message}`)));
+console.log("=== 补单统计（第一腿成交 → 第二腿成交）");
+for (const [k, v] of Object.entries(statsSummary(computeHedgeStats(repo, "e2e")))) console.log(`  ${k}：${v}`);
 
 clearInterval(tick);
 clearInterval(keepFresh);

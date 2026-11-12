@@ -56,6 +56,8 @@ export interface FillRow {
   status: FillStatus;
   matchedAt: number;
   updatedAt: number;
+  /** 本机首次收到这笔成交的时间（之后的状态更新不改变） */
+  receivedAt: number;
   txHash: string | null;
   raw: unknown;
 }
@@ -127,6 +129,7 @@ function toFill(r: Record<string, unknown>): FillRow {
     status: r.status as FillStatus,
     matchedAt: Number(r.matched_at),
     updatedAt: Number(r.updated_at),
+    receivedAt: Number(r.received_at ?? r.updated_at),
     txHash: (r.tx_hash as string | null) ?? null,
     raw: parse(r.raw),
   };
@@ -339,9 +342,9 @@ export class Repo {
       this.db.raw
         .prepare(
           `INSERT INTO fills(pair_id,venue,order_id,venue_order_id,role,outcome,side,token_id,price,gross_shares,fee_shares,fee_collateral,fee_usd,
-           fee_estimated,net_shares,cash_flow,is_maker,status,matched_at,updated_at,tx_hash,raw,key) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+           fee_estimated,net_shares,cash_flow,is_maker,status,matched_at,updated_at,tx_hash,raw,key,received_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         )
-        .run(...cols, f.key);
+        .run(...cols, f.key, f.receivedAt);
     } else {
       this.db.raw
         .prepare(

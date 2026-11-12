@@ -9,6 +9,10 @@ import { isLive, loadConfig, predictUrls } from "./config/load.js";
 import { createContext, loadPairs, refreshBalances, runBot } from "./app.js";
 import { acceptPositionsAsBaseline } from "./engine/reconcile.js";
 import { startStatusServer } from "./monitor/status.js";
+import { computeHedgeStats, statsSummary } from "./monitor/stats.js";
+import { polymarketGeoblock } from "./market/geoblock.js";
+import { Db } from "./db/db.js";
+import { Repo } from "./db/repo.js";
 import type { VerifyResult } from "./pairing/service.js";
 
 interface Args {
@@ -42,6 +46,8 @@ const HELP = `用法: node dist/cli.js <命令> [参数]
   pairs show <pairId>                   查看配对详情（含两边规则原文）
   pairs approve <pairId> --note "原因"  人工批准“待审核”配对（规则版本变化后需重新批准）
   status [--url http://127.0.0.1:8787]  查看运行中机器人的状态
+  stats [--db live|sim] [--hours 24] [--pair id] [--json] [--samples]
+                                        补单统计：第一腿成交到第二腿成交的耗时 P50/P95、分段耗时、补单失败率、滑点
   books <predictMarketId> <polymarketConditionId>
                                         打印两边当前订单簿（REST）
   resume                                解除全局“停止新挂单”
@@ -86,6 +92,32 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (cmd === "stats") {
+    const which = String(args.flags.db ?? (isLive(cfg) ? "live" : "sim"));
+    const db = new Db(`${cfg.app.dataDir}/${which}.db`);
+    const repo = new Repo(db);
+    const since = args.flags.hours ? Date.now() - Number(args.flags.hours) * 3600_000 : 0;
+    const ids = args.flags.pair
+      ? [String(args.flags.pair)]
+      : (db.raw.prepare("SELECT DISTINCT pair_id AS id FROM fills ORDER BY pair_id").all() as { id: string }[]).map((r) => r.id);
+    const out = ids.map((id) => computeHedgeStats(repo, id, since));
+    if (args.flags.json) console.log(JSON.stringify(out.map((s) => ({ ...s, samples: args.flags.samples ? s.samples : undefined })), null, 2));
+    else {
+      console.log(`数据库：${which}.db  统计区间：${since ? `最近 ${args.flags.hours} 小时` : "全部"}  （时间均为北京时间）`);
+      for (const s of out) {
+        console.log(`\n配对 ${s.pairId}`);
+        for (const [k, v] of Object.entries(statsSummary(s))) console.log(`  ${k}：${v}`);
+        if (args.flags.samples) {
+          for (const x of s.samples) {
+            console.log(`    ${bjTime(x.firstLegAt, true)} ${x.makerVenue} ${x.shares} 份 → ${x.resolvedBy}${x.secondLegAt ? ` 交易所口径 ${x.secondLegAt - x.firstLegAt}ms` : ""}${x.secondLegReceivedAt ? ` 本机口径 ${x.secondLegReceivedAt - x.firstLegReceivedAt}ms` : ""}${x.slippage !== null ? ` 滑点 ${x.slippage.toFixed(4)}` : ""}`);
+          }
+        }
+      }
+    }
+    db.close();
+    return;
+  }
+
   const ctx = createContext(cfg, log);
 
   switch (cmd) {
@@ -111,17 +143,23 @@ async function main(): Promise<void> {
       console.log(`模式：${isLive(cfg) ? "实盘" : "模拟"}（config mode=${cfg.app.mode}，LIVE_TRADING=${cfg.secrets.liveTrading}）`);
       console.log(`Predict：${cfg.app.predict.network} ${pf.rest}  API Key：${cfg.secrets.predictApiKey ? "已配置" : "未配置（主网行情不可用）"}`);
       try {
-        const books = await ctx.pmPublic.book("28083174732948602623573656431589352828090389364103778176510099725313482624335").catch(() => null);
-        console.log(`Polymarket 公共接口：${books ? "可访问" : "不可访问"}`);
+        const t0 = Date.now();
+        const res = await fetch(`${cfg.app.polymarket.clobUrl}/time`, { signal: AbortSignal.timeout(10_000) });
+        console.log(`Polymarket 公共接口：${res.ok ? `可访问（往返 ${Date.now() - t0}ms）` : `HTTP ${res.status}`}`);
       } catch (e) {
         console.log(`Polymarket 公共接口：失败 ${errMsg(e)}`);
       }
       try {
+        const t0 = Date.now();
         await ctx.pfPublic.categories(["ESPORTS_CS2"], 1);
-        console.log("Predict 公共接口：可访问");
+        console.log(`Predict 公共接口：可访问（往返 ${Date.now() - t0}ms）`);
       } catch (e) {
         console.log(`Predict 公共接口：失败 ${errMsg(e)}`);
       }
+      const geo = await polymarketGeoblock();
+      if (geo.ok) console.log(`Polymarket 地理限制检查（本机出口 IP ${geo.ip}，${geo.country}${geo.region ? `-${geo.region}` : ""}）：${geo.blocked ? "被限制，不能在此下单" : "未被限制"}`);
+      else console.log(`Polymarket 地理限制检查失败：${geo.error}`);
+      console.log("Predict：没有公开的地区检查接口；受限地区下单会返回 403 forbidden，读行情不受地区限制（机器人收到 403 会阻断该平台并告警）。");
       if (isLive(cfg)) {
         for (const v of VENUES) {
           try {

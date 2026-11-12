@@ -37,7 +37,7 @@ npm run build
 cp config/config.example.yaml config/config.yaml
 cp config/pairs.example.yaml  config/pairs.yaml
 cp .env.example .env          # 填密钥；模拟模式可以先不填
-npm test                      # 58 项测试
+npm test                      # 63 项测试
 ```
 
 机器需要经 HTTP 代理访问外网时，启动前设置 `NODE_USE_ENV_PROXY=1`（让 Node 的 fetch 使用 `HTTPS_PROXY`），WebSocket 会自动走代理。
@@ -142,6 +142,14 @@ Polymarket 电竞市场开赛时清空订单簿（`clearBookOnStart`），Predic
 - 状态页 `http://127.0.0.1:8787/`（JSON：`/api/status`），所有时间为北京时间：两边前 5 档盘口及延迟、订单、实际成交（撮合份额、净到账份额、手续费及是否估算）、各平台持仓（计入敞口/已结算/待结算）、净敞口与含在途补单的预计敞口、裸仓时长、补单耗时（每次敞口从出现到对齐）、费用、费后盈亏（已对冲部分锁定盈亏、未对冲部分成本）、最近报价及不挂单原因、余额、平台阻断、告警。
 - 日志为 JSON 行，时间为 `+08:00` 北京时间；私钥、API Key、密钥、口令、JWT、签名按字段名与值双重脱敏。
 - 告警写入数据库，可选推送到 `ALERT_WEBHOOK_URL`。
+
+## 部署地区与补单耗时测试
+
+两家平台都在 AWS 上（官方文档）：Polymarket 主服务器 `eu-west-2`（伦敦），文档列出的最近非受限地区为 `eu-west-1`（爱尔兰）；Predict 服务器在 `ap-northeast-1`（东京）。英国在 Polymarket“前端与 API 都只能平仓”名单中；爱尔兰、日本在“只在网页只平仓、API 不受限”名单中（帮助中心另有说法，实盘前需向平台确认账户资格）。
+
+- `node dist/cli.js check`：调用 Polymarket 官方地理限制接口检查本机出口 IP；实盘启动时同样检查，被限制则阻断 Polymarket 交易。Predict 没有公开的检查接口，受限地区下单返回 403，机器人会阻断该平台并告警。
+- `node dist/cli.js stats --hours 24`：按配对输出第一腿成交 → 第二腿成交的总耗时（交易所口径与本机口径的均值/P50/P95/最大值）、分段耗时（成交通知、决策、补单执行）、补单失败率、补单部分成交数、需紧急处理比例、每份滑点（实际补单含费成本 − 挂单时预期）。加 `--samples` 逐笔列出，`--json` 输出原始数据，`--db live|sim` 选择数据库。状态页也显示近 7 天统计。
+- 两地用同一配置、同一交易方向、相近时段各跑一轮，比较 P95、失败率与滑点。Polymarket 的 `match_time` 只有秒级精度，交易所口径以毫秒推送时间为准，比较时优先看本机口径与分段耗时。
 
 ## 已验证 / 需要真实账户小额实测
 

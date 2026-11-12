@@ -74,6 +74,7 @@ export type VenueErrorClass =
   | "RESTARTING"
   | "DUPLICATE"
   | "NETWORK"
+  | "FORBIDDEN"
   | "OTHER";
 
 export class VenueError extends Error {

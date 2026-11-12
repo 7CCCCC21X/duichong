@@ -22,6 +22,7 @@ import { PolymarketLiveVenue } from "./venues/polymarket/live.js";
 import { PredictLiveVenue } from "./venues/predict/live.js";
 import { SimVenue } from "./venues/sim/simVenue.js";
 import type { TradingVenue } from "./venues/types.js";
+import { polymarketGeoblock } from "./market/geoblock.js";
 
 export interface AppContext {
   cfg: LoadedConfig;
@@ -298,6 +299,18 @@ export async function runBot(ctx: AppContext): Promise<() => Promise<void>> {
     }
   };
 
+  if (ctx.live) {
+    // 部署地区自检：Polymarket 官方地理限制接口；被限制时阻断 Polymarket 交易（读行情不受影响）
+    const geo = await polymarketGeoblock();
+    if (geo.ok && geo.blocked) {
+      ctx.risk.block("polymarket", "geoblock", `本机出口 IP ${geo.ip}（${geo.country}${geo.region ? `-${geo.region}` : ""}）被 Polymarket 地理限制`);
+      ctx.alerts.raise("critical", "GEOBLOCK", `本机出口 IP ${geo.ip}（${geo.country}）被 Polymarket 地理限制，已阻断 Polymarket 交易`);
+    } else if (geo.ok) {
+      log.info({ ip: geo.ip, country: geo.country, region: geo.region }, "Polymarket 地理限制检查通过");
+    } else {
+      log.warn({ err: geo.error }, "Polymarket 地理限制检查失败（请手动确认部署地区资格）");
+    }
+  }
   await Promise.all(VENUES.map((v) => ctx.venues[v].start()));
   ctx.pmFeed.start();
   ctx.pfFeed.start();

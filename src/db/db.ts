@@ -128,6 +128,8 @@ const MIGRATIONS: string[] = [
     updated_at INTEGER NOT NULL
   );
   `,
+  // v2：成交的本机首次收到时间（统计补单耗时用）
+  `ALTER TABLE fills ADD COLUMN received_at INTEGER;`,
 ];
 
 export class Db {

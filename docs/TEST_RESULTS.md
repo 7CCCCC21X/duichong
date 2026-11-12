@@ -3,7 +3,7 @@
 运行环境：Node.js 24.22.2；测试框架 vitest 3.2.7；运行时间 2026-11-12（北京时间）。
 
 ```bash
-npm test            # 58 项全部通过：Test Files 4 passed (4)，Tests 58 passed (58)
+npm test            # 63 项全部通过：Test Files 5 passed (5)，Tests 63 passed (63)
 npm run typecheck   # 通过（含对两家官方 SDK 类型的检查）
 ```
 
@@ -73,6 +73,15 @@ npm run typecheck   # 通过（含对两家官方 SDK 类型的检查）
 | Predict 钱包事件：撮合 → 结算成功（份额手续费）同一去重键；心跳原样回显 | 通过 |
 | Predict：post-only 被拒、市价单撮合计划、结算失败 | 通过 |
 | Predict 数量按 SDK 规则保留 5 位有效数字 | 通过 |
+
+## 4b. 补单统计与地区受限（`test/stats.test.ts`）
+
+| 用例 | 结果 |
+| --- | --- |
+| Polymarket 秒级 `match_time` 与毫秒 `timestamp` 字符串解析 | 通过 |
+| 补单统计：首次补单被拒、重试成交 → 总耗时 2.5s、通知 0ms、滑点约 0、补单失败率 50% | 通过 |
+| 分位数（就近排名） | 通过 |
+| Predict 403 forbidden 归类为地区/账户受限；挂单被拒后阻断该平台并告警 | 通过 |
 
 ## 5. 真实公开行情核对（不需要凭证，`scripts/live-data-check.ts`）
 

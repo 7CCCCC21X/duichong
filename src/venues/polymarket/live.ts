@@ -300,6 +300,9 @@ export class PolymarketLiveVenue implements TradingVenue {
       const restriction = (e as { restriction?: string }).restriction;
       if (restriction === "restarting") return new VenueError(`撮合引擎重启：${e.message}`, "RESTARTING", (e.retryAfter ?? 2) * 1000, e);
       if (restriction === "post_only") return new VenueError(`仅接受 post-only：${e.message}`, "RESTARTING", (e.retryAfter ?? 5) * 1000, e);
+      if (e.status === 403 && /region|jurisdiction|restricted|geoblock|not available in your/i.test(e.message)) {
+        return new VenueError(`地区或账户受限：${e.message}`, "FORBIDDEN", null, e);
+      }
       if (e.status === 401 || e.status === 403) {
         this.authOk = false;
         this.lastError = e.message;
@@ -403,7 +406,9 @@ export class PolymarketLiveVenue implements TradingVenue {
     const get = (a: string, b: string) => t[a] ?? t[b];
     const tradeId = String(get("id", "id"));
     const status = mapTradeStatus(String(get("status", "status") ?? "MATCHED"));
-    const matchedAt = parseTime(String(get("matchedAt", "match_time") ?? "")) ?? Date.now();
+    // match_time 只有秒级精度；撮合（MATCHED）推送带毫秒 timestamp 时优先使用，便于统计补单耗时
+    const msTs = parseTime(String(get("timestamp", "timestamp") ?? ""));
+    const matchedAt = (status === "MATCHED" && msTs !== null ? msTs : null) ?? parseTime(String(get("matchedAt", "match_time") ?? "")) ?? msTs ?? Date.now();
     const txHash = (get("transactionHash", "transaction_hash") as string | undefined) ?? null;
     const out: VenueFill[] = [];
     const owner = String(get("owner", "owner") ?? "");

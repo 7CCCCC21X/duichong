@@ -4,6 +4,9 @@ import { bjTime, fmtDuration } from "../core/time.js";
 import { VENUES, type Outcome, type VenueId } from "../core/types.js";
 import type { AppContext } from "../app.js";
 import type { PairSnapshot } from "../engine/pairEngine.js";
+import { computeHedgeStats, statsSummary } from "./stats.js";
+
+let statsCache: { at: number; data: Record<string, unknown> } | null = null;
 
 const f = (x: Fx | null | undefined, dp = 4) => (x === null || x === undefined ? "-" : toStr(x, dp));
 
@@ -128,6 +131,13 @@ export function statusJson(ctx: AppContext): Record<string, unknown> {
     交易连接: health,
     余额: balances,
     配对: [...ctx.engines.values()].map((e) => pairStatusJson(e.snapshot(), now)),
+    补单统计_近7天: (() => {
+      if (!statsCache || now - statsCache.at > 10_000) {
+        const since = now - 7 * 24 * 3600_000;
+        statsCache = { at: now, data: Object.fromEntries([...ctx.engines.keys()].map((id) => [id, statsSummary(computeHedgeStats(ctx.repo, id, since))])) };
+      }
+      return statsCache.data;
+    })(),
     待审核或未通过的配对: [...ctx.stored.values()].filter((p) => p.status !== "APPROVED" && p.status !== "APPROVED_MANUAL").map((p) => ({ 配对: p.id, 状态: p.status, 原因: p.statusReason })),
     告警: ctx.alerts.recent.slice(0, 30).map((a) => ({ 时间: bjTime(a.ts), 级别: a.level, 代码: a.code, 配对: a.pairId ?? "-", 内容: a.message })),
   };
@@ -156,6 +166,7 @@ for(const p of s.配对){h+='<h2>'+esc(p.配对)+'：'+esc(p.队伍.A)+' vs '+es
 h+='<h3>盘口（前 5 档）</h3><div class="card">'+table(Object.entries(p.盘口).map(([k,b])=>({品种:k,延迟:b?.延迟,买:(b?.买||[]).join('  '),卖:(b?.卖||[]).join('  ')})))+'</div>';
 h+='<h3>持仓</h3><div class="card">'+table(Object.entries(p.持仓).map(([v,o])=>({平台:v,...o})))+'</div>';
 h+='<h3>订单</h3><div class="card">'+table(p.订单)+'</div><h3>成交</h3><div class="card">'+table(p.成交)+'</div><h3>补单耗时</h3><div class="card">'+table(p.补单耗时.最近)+'</div>'}
+if(s.补单统计_近7天)h+='<h2>补单统计（近 7 天）</h2>'+Object.entries(s.补单统计_近7天).map(([k,v])=>'<div class="card"><b>'+esc(k)+'</b>'+kv(v)+'</div>').join('');
 if(s.待审核或未通过的配对.length)h+='<h2>待审核 / 未通过的配对</h2><div class="card">'+table(s.待审核或未通过的配对)+'</div>';
 h+='<h2>告警</h2><div class="card">'+table(s.告警)+'</div>';document.getElementById('root').innerHTML=h}catch(e){document.getElementById('root').textContent='读取状态失败：'+e}}
 load();setInterval(load,2000);

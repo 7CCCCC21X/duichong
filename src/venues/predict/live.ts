@@ -39,7 +39,9 @@ export function retainSignificant(v: bigint, digits: number): bigint {
   return BigInt(keep);
 }
 
-function mapErrorCode(code: string, status: number): VenueErrorClass {
+export function mapErrorCode(code: string, status: number): VenueErrorClass {
+  // 文档：受限地区或被封钱包下单返回 403 forbidden（"This operation is not available in your jurisdiction"）
+  if (status === 403 || code === "forbidden") return "FORBIDDEN";
   if (status === 401) return "AUTH";
   if (status === 429) return "RATE_LIMIT";
   if (/insufficient_(collateral|shares)_balance/.test(code)) return "INSUFFICIENT_BALANCE";

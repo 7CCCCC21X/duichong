@@ -56,6 +56,7 @@ export function toFillRow(vf: VenueFill, order: OrderRow, fee: FeeParams, now: n
     status: vf.status,
     matchedAt: vf.matchedAt,
     updatedAt: now,
+    receivedAt: now,
     txHash: vf.txHash,
     raw: vf.raw ?? null,
   };
