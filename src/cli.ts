@@ -73,6 +73,8 @@ async function main(): Promise<void> {
     return;
   }
   const cfg = loadConfig({ configPath: args.flags.config as string | undefined, pairsPath: args.flags.pairs as string | undefined, envPath: args.flags.env as string | undefined });
+  // 订单心跳只在 run 中开启：其他命令结束后心跳停止，10 秒后交易所会撤掉该 API Key 的全部挂单
+  if (cmd !== "run") cfg.app.polymarket.orderHeartbeat = false;
   mkdirSync(cfg.app.dataDir, { recursive: true });
   const log = createLogger({ level: cmd === "run" ? cfg.app.logLevel : (process.env.LOG_LEVEL ?? "warn"), file: cmd === "run" ? (cfg.app.logFile ?? undefined) : undefined });
 
